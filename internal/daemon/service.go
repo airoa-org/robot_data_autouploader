@@ -1,0 +1,312 @@
+package daemon
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+
+	appconfig "github.com/airoa-org/robot_data_pipeline/autoloader/internal/config"
+	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/jobs"
+	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/storage"
+	"go.uber.org/zap"
+)
+
+// Service represents the daemon service
+type Service struct {
+	config       *appconfig.Config
+	logger       *zap.SugaredLogger
+	db           *storage.DB
+	copyQueue    *jobs.Queue
+	uploadQueue  *jobs.Queue
+	copyWorker   *jobs.CopyWorker
+	uploadWorker *jobs.UploadWorker
+	usbMonitor   USBDetector
+
+	ctx        context.Context
+	cancelFunc context.CancelFunc
+	wg         sync.WaitGroup
+}
+
+// NewService creates a new daemon service
+func NewService(configPath string) (*Service, error) {
+	// Create context with cancellation
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Initialize logger
+	logger, err := initLogger()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to initialize logger: %w", err)
+	}
+
+	// Load configuration
+	cfg, err := appconfig.LoadConfig(configPath)
+	if err != nil {
+		cancel()
+		logger.Errorw("Failed to load configuration", "error", err)
+		return nil, fmt.Errorf("failed to load configuration: %w", err)
+	}
+
+	logger.Infow("Configuration loaded", "config_path", configPath)
+
+	// Create service
+	svc := &Service{
+		config:     cfg,
+		logger:     logger,
+		ctx:        ctx,
+		cancelFunc: cancel,
+	}
+
+	return svc, nil
+}
+
+// Start starts the daemon service
+func (s *Service) Start() error {
+	s.logger.Info("Starting daemon service")
+
+	// Initialize database
+	if err := s.initDatabase(); err != nil {
+		return fmt.Errorf("failed to initialize database: %w", err)
+	}
+
+	// Initialize job queues
+	if err := s.initJobQueues(); err != nil {
+		return fmt.Errorf("failed to initialize job queues: %w", err)
+	}
+
+	// Initialize workers
+	if err := s.initWorkers(); err != nil {
+		return fmt.Errorf("failed to initialize workers: %w", err)
+	}
+
+	// Initialize USB monitor
+	if err := s.initUSBMonitor(); err != nil {
+		return fmt.Errorf("failed to initialize USB monitor: %w", err)
+	}
+
+	// Start workers
+	s.startWorkers()
+
+	// Start USB monitor
+	s.startUSBMonitor()
+
+	s.logger.Info("Daemon service started")
+
+	return nil
+}
+
+// Stop stops the daemon service
+func (s *Service) Stop() {
+	s.logger.Info("Stopping daemon service")
+
+	// Cancel context to signal all components to stop
+	s.cancelFunc()
+
+	// Stop USB monitor
+	if s.usbMonitor != nil {
+		s.usbMonitor.Stop()
+	}
+
+	// Stop workers
+	if s.uploadWorker != nil {
+		s.uploadWorker.Stop()
+	}
+
+	if s.copyWorker != nil {
+		s.copyWorker.Stop()
+	}
+
+	// Close queues
+	if s.uploadQueue != nil {
+		s.uploadQueue.Close()
+	}
+
+	if s.copyQueue != nil {
+		s.copyQueue.Close()
+	}
+
+	// Close database
+	if s.db != nil {
+		s.db.Close()
+	}
+
+	// Wait for all goroutines to finish
+	s.wg.Wait()
+
+	s.logger.Info("Daemon service stopped")
+}
+
+// initLogger initializes the logger
+func initLogger() (*zap.SugaredLogger, error) {
+	// Create production logger
+	logger, err := zap.NewProduction()
+	if err != nil {
+		return nil, err
+	}
+
+	return logger.Sugar(), nil
+}
+
+// initDatabase initializes the database
+func (s *Service) initDatabase() error {
+	s.logger.Infow("Initializing database", "path", s.config.Daemon.DatabasePath)
+
+	// Create database directory if it doesn't exist
+	dbDir := filepath.Dir(s.config.Daemon.DatabasePath)
+	if err := os.MkdirAll(dbDir, 0755); err != nil {
+		return fmt.Errorf("failed to create database directory: %w", err)
+	}
+
+	// Initialize database
+	db, err := storage.NewDB(s.config.Daemon.DatabasePath, s.logger)
+	if err != nil {
+		return fmt.Errorf("failed to initialize database: %w", err)
+	}
+
+	s.db = db
+
+	// Migrate database schema
+	if err := s.db.Migrate(); err != nil {
+		return fmt.Errorf("failed to migrate database: %w", err)
+	}
+
+	s.logger.Info("Database initialized")
+
+	return nil
+}
+
+// initJobQueues initializes the job queues
+func (s *Service) initJobQueues() error {
+	s.logger.Info("Initializing job queues")
+
+	// Create copy queue
+	s.copyQueue = jobs.NewQueue("copy", s.config.Jobs.MaxRetries, s.logger)
+
+	// Create upload queue
+	s.uploadQueue = jobs.NewQueue("upload", s.config.Jobs.MaxRetries, s.logger)
+
+	// Load pending jobs from database
+	if err := s.loadPendingJobs(); err != nil {
+		return fmt.Errorf("failed to load pending jobs: %w", err)
+	}
+
+	s.logger.Info("Job queues initialized")
+
+	return nil
+}
+
+// loadPendingJobs loads pending jobs from the database
+func (s *Service) loadPendingJobs() error {
+	s.logger.Info("Loading pending jobs from database")
+
+	// Load pending copy jobs
+	copyJobs, err := s.db.GetPendingJobs(jobs.JobTypeCopy)
+	if err != nil {
+		return fmt.Errorf("failed to load pending copy jobs: %w", err)
+	}
+
+	// Enqueue copy jobs
+	for _, job := range copyJobs {
+		if err := s.copyQueue.Enqueue(job); err != nil {
+			s.logger.Warnw("Failed to enqueue copy job",
+				"jobID", job.ID,
+				"error", err)
+		}
+	}
+
+	// Load pending upload jobs
+	uploadJobs, err := s.db.GetPendingJobs(jobs.JobTypeUpload)
+	if err != nil {
+		return fmt.Errorf("failed to load pending upload jobs: %w", err)
+	}
+
+	// Enqueue upload jobs
+	for _, job := range uploadJobs {
+		if err := s.uploadQueue.Enqueue(job); err != nil {
+			s.logger.Warnw("Failed to enqueue upload job",
+				"jobID", job.ID,
+				"error", err)
+		}
+	}
+
+	s.logger.Infow("Pending jobs loaded",
+		"copyJobs", len(copyJobs),
+		"uploadJobs", len(uploadJobs))
+
+	return nil
+}
+
+// initWorkers initializes the workers
+func (s *Service) initWorkers() error {
+	s.logger.Info("Initializing workers")
+
+	// Explicitly assert s.db to jobs.JobPersister
+	var persister jobs.JobPersister
+	persister = s.db // This line will fail if s.db doesn't satisfy the interface
+
+	// Create copy worker
+	s.copyWorker = jobs.NewCopyWorker(
+		s.copyQueue,
+		s.uploadQueue,
+		s.config,
+		persister, // Pass the asserted persister
+		s.logger,
+	)
+
+	// Create upload worker
+	s.uploadWorker = jobs.NewUploadWorker(
+		s.uploadQueue,
+		s.config,
+		persister, // Pass the asserted persister
+		s.logger,
+	)
+
+	s.logger.Info("Workers initialized")
+
+	return nil
+}
+
+// startWorkers starts the workers
+func (s *Service) startWorkers() {
+	s.logger.Info("Starting workers")
+
+	// Start copy worker
+	s.copyWorker.Start()
+
+	// Start upload worker
+	s.uploadWorker.Start()
+
+	s.logger.Info("Workers started")
+}
+
+// initUSBMonitor initializes the USB monitor
+func (s *Service) initUSBMonitor() error {
+	s.logger.Info("Initializing USB monitor")
+
+	s.usbMonitor = NewUSBMonitor(s.config, s.copyQueue, s.db, s.logger)
+
+	s.logger.Info("USB monitor initialized")
+
+	return nil
+}
+
+// startUSBMonitor starts the USB monitor
+func (s *Service) startUSBMonitor() {
+	s.logger.Info("Starting USB monitor")
+
+	// Start USB monitor
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.usbMonitor.Start(s.ctx)
+	}()
+
+	s.logger.Info("USB monitor started")
+}
+
+// WaitForShutdown waits for the service to shut down
+func (s *Service) WaitForShutdown() {
+	s.wg.Wait()
+}

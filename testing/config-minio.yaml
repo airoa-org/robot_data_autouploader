@@ -1,0 +1,47 @@
+# Auto Uploader System Configuration with MinIO for S3 testing
+
+daemon:
+  log_level: info
+  database_path: ~/.autoloader/jobs.db
+
+storage:
+  s3:
+    access_key: "minioadmin"
+    secret_key: "minioadmin"
+    bucket: "autoloader-bucket"
+    upload_path: "weblab"
+    endpoint: "http://localhost:9000"
+    region: "us-east-1"
+    organization: "test-org"
+  
+  local:
+    staging_dir: ~/.autoloader/staging
+    retention_policy: delete_after_upload
+
+usb:
+  auto_mount: true
+  ignored_patterns:
+    - "SYSTEM*"
+    - ".*"
+  target_mount_point: "/Users/rw21/Documents/weblab/code/robot_data_autouploader/test_paths"
+  scan_interval_ms: 500
+
+jobs:
+  direct_upload: false
+  max_retries: 3
+  retry_delay_seconds: 30
+  
+copy:
+  parallelism: 1
+  buffer_size_kb: 512
+  exclude_patterns:
+    - "*.tmp"
+    - "*.DS_Store"
+
+upload:
+  parallelism: 1
+  throttle_mbps: 50
+  chunk_size_mb: 8
+  verify_after_upload: true
+  verification_mode: "full"
+  
