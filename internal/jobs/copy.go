@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	appconfig "github.com/airoa-org/robot_data_pipeline/autoloader/internal/config"
 	"go.uber.org/zap"
@@ -105,6 +106,55 @@ func (w *CopyWorker) processJob(job *Job) {
 			"error", err)
 		job.SetError(fmt.Errorf("source not found: %w", err))
 		if errDb := w.persister.SaveJob(job); errDb != nil { // Use persister
+			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
+		}
+		return
+	}
+
+	// Check if there's enough disk space available for the copy operation
+	hasSpace, spaceErr := w.hasEnoughDiskSpace(job.Source, job.Destination)
+	if spaceErr != nil {
+		w.logger.Errorw("Failed to check disk space",
+			"jobID", job.ID,
+			"source", job.Source,
+			"destination", job.Destination,
+			"error", spaceErr)
+		job.SetError(fmt.Errorf("failed to check disk space: %w", spaceErr))
+		if errDb := w.persister.SaveJob(job); errDb != nil {
+			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
+		}
+		return
+	}
+
+	if !hasSpace {
+		w.logger.Errorw("Not enough disk space available for copy operation",
+			"jobID", job.ID,
+			"source", job.Source,
+			"destination", job.Destination)
+
+		// Get the sizes for detailed error message
+		sourceSize, _ := getDirSize(job.Source)
+		var stat syscall.Statfs_t
+		syscall.Statfs(filepath.Dir(job.Destination), &stat)
+		availableSpace := stat.Bavail * uint64(stat.Bsize)
+		totalSpace := stat.Blocks * uint64(stat.Bsize)
+
+		// Format sizes in a human-readable way
+		sourceSizeGB := float64(sourceSize) / (1024 * 1024 * 1024)
+		availableSpaceGB := float64(availableSpace) / (1024 * 1024 * 1024)
+		totalSpaceGB := float64(totalSpace) / (1024 * 1024 * 1024)
+
+		errorMsg := fmt.Sprintf(
+			"Not enough disk space available. Required: %.2f GB, Available: %.2f GB (%.1f%% of %.2f GB). Minimum free space required: %.1f%%",
+			sourceSizeGB,
+			availableSpaceGB,
+			(float64(availableSpace)/float64(totalSpace))*100,
+			totalSpaceGB,
+			w.config.Copy.MinFreeSpaceRatio*100,
+		)
+
+		job.SetError(errors.New(errorMsg))
+		if errDb := w.persister.SaveJob(job); errDb != nil {
 			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
 		}
 		return
@@ -367,4 +417,89 @@ func (w *CopyWorker) createUploadJob(copyJob *Job) {
 		"copyJobID", copyJob.ID,
 		"source", uploadSourcePath,
 		"s3_key_prefix", s3KeyPrefix)
+}
+
+// getDirSize calculates the total size of a directory recursively
+func getDirSize(path string) (int64, error) {
+	var size int64
+	err := filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			size += info.Size()
+		}
+		return nil
+	})
+	return size, err
+}
+
+// hasEnoughDiskSpace checks if there's enough disk space available for the copy operation
+func (w *CopyWorker) hasEnoughDiskSpace(sourcePath string, destPath string) (bool, error) {
+	// Calculate the size of the source (file or directory)
+	var sourceSize int64
+	var err error
+
+	fileInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		return false, fmt.Errorf("failed to stat source: %w", err)
+	}
+
+	if fileInfo.IsDir() {
+		sourceSize, err = getDirSize(sourcePath)
+		if err != nil {
+			return false, fmt.Errorf("failed to calculate directory size: %w", err)
+		}
+	} else {
+		sourceSize = fileInfo.Size()
+	}
+
+	// Get available disk space at the destination
+	// Make sure the destination directory exists for checking
+	destDir := destPath
+	if !fileInfo.IsDir() {
+		destDir = filepath.Dir(destPath)
+	}
+
+	// Create destination directory if it doesn't exist to check space
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return false, fmt.Errorf("failed to create destination directory for space check: %w", err)
+	}
+
+	// Get total and available disk space
+	var stat syscall.Statfs_t
+	err = syscall.Statfs(destDir, &stat)
+	if err != nil {
+		return false, fmt.Errorf("failed to get disk space stats: %w", err)
+	}
+
+	totalSpace := stat.Blocks * uint64(stat.Bsize)
+	availableSpace := stat.Bavail * uint64(stat.Bsize)
+
+	// Apply the minimum free space ratio from config
+	minFreeSpaceRatio := w.config.Copy.MinFreeSpaceRatio
+	if minFreeSpaceRatio <= 0 {
+		minFreeSpaceRatio = 0.05 // Default to 5% if not specified
+	}
+
+	// Calculate required space with buffer
+	requiredSpace := uint64(sourceSize)
+
+	// Calculate free space that will remain after copy
+	remainingSpace := availableSpace - requiredSpace
+	remainingRatio := float64(remainingSpace) / float64(totalSpace)
+
+	w.logger.Debugw("Disk space check",
+		"sourcePath", sourcePath,
+		"sourceSize", sourceSize,
+		"availableSpace", availableSpace,
+		"totalSpace", totalSpace,
+		"requiredSpace", requiredSpace,
+		"remainingSpace", remainingSpace,
+		"remainingRatio", remainingRatio,
+		"minFreeSpaceRatio", minFreeSpaceRatio)
+
+	// Available space must be greater than required space AND
+	// remaining ratio after copy must be greater than minimum ratio
+	return availableSpace >= requiredSpace && remainingRatio >= minFreeSpaceRatio, nil
 }
