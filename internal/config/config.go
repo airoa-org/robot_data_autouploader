@@ -169,7 +169,7 @@ func setDefaultValues(v *viper.Viper) {
 	v.SetDefault("usb.ignored_patterns", []string{"SYSTEM*", ".*"})
 	v.SetDefault("usb.scan_interval_ms", 500)
 	v.SetDefault("usb.target_mount_point", "/storage")
-	v.SetDefault("usb.target_directory", "rosbags")
+	v.SetDefault("usb.target_directory", "")
 
 	// Jobs defaults
 	v.SetDefault("jobs.direct_upload", false)

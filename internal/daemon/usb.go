@@ -180,7 +180,12 @@ func (m *USBMonitor) checkMountedVolumes() {
 		}
 
 		m.logger.Debugw("Checking volume", "path", volumePath)
-		dataRoot := filepath.Join(filepath.Join(volumePath, m.config.USB.TargetDirectory))
+		var dataRoot string
+		if m.config.USB.TargetDirectory == "" {
+			dataRoot = volumePath // Use the volume root if no target directory is specified
+		} else {
+			dataRoot = filepath.Join(filepath.Join(volumePath, m.config.USB.TargetDirectory))
+		}
 
 		dirEntries, err := os.ReadDir(dataRoot)
 		if err != nil {
