@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	appconfig "github.com/airoa-org/robot_data_pipeline/autoloader/internal/config"
@@ -512,6 +513,33 @@ func (w *UploadWorker) uploadFile(job *Job, filePath, s3Key string) error {
 	}
 
 	w.logger.Infow("S3 upload completed successfully", "jobID", job.ID, "filePath", filePath, "s3Key", finalS3Key)
+
+	// Create a .upload_complete marker file in the same directory
+	markerKey := filepath.ToSlash(filepath.Dir(finalS3Key))
+	if markerKey != "" && markerKey != "." {
+		markerKey = markerKey + "/.upload_complete"
+	} else {
+		markerKey = ".upload_complete"
+	}
+
+	// Upload an empty file as the marker
+	_, err = w.s3Client.PutObject(w.ctx, &s3.PutObjectInput{
+		Bucket: aws.String(w.config.Storage.S3.Bucket),
+		Key:    aws.String(markerKey),
+		Body:   strings.NewReader(""),
+	})
+
+	if err != nil {
+		w.logger.Warnw("Failed to create upload_complete marker file",
+			"jobID", job.ID,
+			"s3Key", markerKey,
+			"error", err)
+		// Don't fail the job if marker creation fails, just log a warning
+	} else {
+		w.logger.Infow("Created upload_complete marker file",
+			"jobID", job.ID,
+			"s3Key", markerKey)
+	}
 
 	if job.FileCount <= 1 && job.TotalSize == fileInfo.Size() {
 		job.ProcessedSize = fileInfo.Size()
