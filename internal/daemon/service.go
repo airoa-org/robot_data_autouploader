@@ -201,6 +201,12 @@ func (s *Service) initJobQueues() error {
 func (s *Service) loadPendingJobs() error {
 	s.logger.Info("Loading pending jobs from database")
 
+	// First cleanup any interrupted jobs that might have been left in an inconsistent state
+	if err := s.cleanupInterruptedJobs(); err != nil {
+		s.logger.Warnw("Failed to cleanup interrupted jobs", "error", err)
+		// Continue with loading pending jobs despite the error
+	}
+
 	// Load pending copy jobs
 	copyJobs, err := s.db.GetPendingJobs(jobs.JobTypeCopy)
 	if err != nil {
@@ -309,4 +315,57 @@ func (s *Service) startUSBMonitor() {
 // WaitForShutdown waits for the service to shut down
 func (s *Service) WaitForShutdown() {
 	s.wg.Wait()
+}
+
+// cleanupInterruptedJobs finds any jobs in in_progress, paused, or queued states
+// and updates them to error status. This is called during startup to handle
+// jobs that were interrupted by a previous shutdown or crash.
+func (s *Service) cleanupInterruptedJobs() error {
+	s.logger.Info("Checking for interrupted jobs that need cleanup")
+
+	// Get all jobs that might have been interrupted (in_progress, paused, queued)
+	interruptedJobs, err := s.db.GetJobsByStatus(
+		jobs.JobStatusInProgress,
+		jobs.JobStatusPaused,
+		jobs.JobStatusQueued,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to get interrupted jobs: %w", err)
+	}
+
+	if len(interruptedJobs) == 0 {
+		s.logger.Info("No interrupted jobs found that need cleanup")
+		return nil
+	}
+
+	s.logger.Infow("Found interrupted jobs that need cleanup", "count", len(interruptedJobs))
+
+	// Update each job to error status
+	for _, job := range interruptedJobs {
+		s.logger.Infow("Cleaning up interrupted job",
+			"jobID", job.ID,
+			"type", job.Type,
+			"status", job.Status,
+			"source", job.Source,
+			"destination", job.Destination)
+
+		// Set error status
+		job.SetError(fmt.Errorf("job was interrupted by system restart or shutdown"))
+
+		// Save updated status to database
+		if err := s.db.SaveJob(job); err != nil {
+			s.logger.Errorw("Failed to update interrupted job status",
+				"jobID", job.ID,
+				"error", err)
+			// Continue with other jobs despite the error
+			continue
+		}
+
+		// If it's a copy job, jobs will be automatically recreated by the USB monitor
+		// when it detects the same USB device and path.
+		// If it's an upload job from a staging area, it will be recreated by the copy job that finishes.
+	}
+
+	s.logger.Infow("Completed cleanup of interrupted jobs", "count", len(interruptedJobs))
+	return nil
 }

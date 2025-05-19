@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	j "github.com/airoa-org/robot_data_pipeline/autoloader/internal/jobs" // Explicit alias
@@ -366,4 +367,82 @@ func (d *DB) HasSuccessfullyCopiedJob(sourcePath string) (bool, error) {
 		return false, fmt.Errorf("failed to query jobs table for source '%s': %w", sourcePath, err)
 	}
 	return count > 0, nil
+}
+
+// GetJobsByStatus retrieves jobs that match any of the provided statuses
+func (d *DB) GetJobsByStatus(statuses ...j.JobStatus) ([]*j.Job, error) {
+	if len(statuses) == 0 {
+		return nil, fmt.Errorf("at least one status must be provided")
+	}
+
+	// Build query with placeholders for each status
+	placeholders := make([]string, len(statuses))
+	args := make([]interface{}, len(statuses))
+	for i, status := range statuses {
+		placeholders[i] = "?"
+		args[i] = status
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, type, source, destination, status, progress, 
+			created_at, updated_at, error_message, 
+			file_count, total_size, processed_size
+		FROM jobs
+		WHERE status IN (%s)
+		ORDER BY created_at ASC
+	`, strings.Join(placeholders, ","))
+
+	// Query jobs
+	rows, err := d.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get jobs by status: %w", err)
+	}
+	defer rows.Close()
+
+	// Parse jobs
+	var jobsList []*j.Job
+	for rows.Next() {
+		job := &j.Job{}
+		var createdAt, updatedAt string
+		err := rows.Scan(
+			&job.ID, &job.Type, &job.Source, &job.Destination, &job.Status, &job.Progress,
+			&createdAt, &updatedAt, &job.ErrorMsg,
+			&job.FileCount, &job.TotalSize, &job.ProcessedSize,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse job: %w", err)
+		}
+
+		// Parse timestamps
+		job.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		job.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+
+		// Initialize metadata
+		job.Metadata = make(map[string]string)
+
+		// Add job to list
+		jobsList = append(jobsList, job)
+	}
+
+	// Load metadata for all jobs
+	for _, job := range jobsList {
+		// Query metadata
+		metaRows, err := d.db.Query("SELECT key, value FROM job_metadata WHERE job_id = ?", job.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get job metadata: %w", err)
+		}
+
+		// Parse metadata
+		for metaRows.Next() {
+			var key, value string
+			if err := metaRows.Scan(&key, &value); err != nil {
+				metaRows.Close()
+				return nil, fmt.Errorf("failed to parse job metadata: %w", err)
+			}
+			job.Metadata[key] = value
+		}
+		metaRows.Close()
+	}
+
+	return jobsList, nil
 }
