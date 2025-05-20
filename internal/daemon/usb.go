@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,6 +49,7 @@ type USBDeviceInfo struct {
 	Name        string    `json:"name"`
 	MountPoint  string    `json:"mount_point"`
 	VolumeName  string    `json:"volume_name,omitempty"`
+	VolumeLabel string    `json:"volume_label,omitempty"` // USB label from .hsrdata file
 	Status      USBStatus `json:"status"`
 	JobID       string    `json:"job_id,omitempty"`
 	DetectedAt  time.Time `json:"detected_at"`
@@ -188,6 +190,19 @@ func (m *USBMonitor) checkMountedVolumes() {
 			dataRoot = filepath.Join(filepath.Join(volumePath, m.config.USB.TargetDirectory))
 		}
 
+		// Check for .hsrdata file in the volume root to get USB label
+		usblabel := "HSR_DEFAULT"
+		hsrDataFile := filepath.Join(volumePath, ".hsrdata")
+		if hsrData, err := os.ReadFile(hsrDataFile); err == nil {
+			// Trim any whitespace including newlines
+			usblabel = string(hsrData)
+			usblabel = strings.TrimSpace(usblabel)
+			m.logger.Debugw("Found USB label", "volumePath", volumePath, "label", usblabel)
+		} else {
+			m.logger.Warnw("No .hsrdata file found or error reading it",
+				"volumePath", volumePath, "error", err)
+		}
+
 		dirEntries, err := os.ReadDir(dataRoot)
 		if err != nil {
 			m.logger.Debugw("Error reading data root directory", "directory", dataRoot, "error", err)
@@ -234,6 +249,7 @@ func (m *USBMonitor) checkMountedVolumes() {
 						Status:      USBStatusCompleted,
 						DetectedAt:  time.Now(), // Or fetch from DB if available
 						CompletedAt: time.Now(),
+						VolumeLabel: usblabel,
 					}
 				}
 				m.deviceMutex.Unlock()
@@ -242,12 +258,13 @@ func (m *USBMonitor) checkMountedVolumes() {
 
 			m.logger.Infow("New or previously failed/unprocessed directory detected for processing", "dirPath", dirPath)
 			deviceInfo := &USBDeviceInfo{
-				ID:         dirTaskID,
-				Name:       dirEntry.Name(), // This is the directory name, e.g., "dataset1"
-				MountPoint: dirPath,         // Full path to the directory on USB
-				VolumeName: volEntry.Name(), // Volume name, e.g., "USB_DRIVE"
-				Status:     USBStatusDetected,
-				DetectedAt: time.Now(),
+				ID:          dirTaskID,
+				Name:        dirEntry.Name(), // This is the directory name, e.g., "dataset1"
+				MountPoint:  dirPath,         // Full path to the directory on USB
+				VolumeName:  volEntry.Name(), // Volume name, e.g., "USB_DRIVE"
+				Status:      USBStatusDetected,
+				DetectedAt:  time.Now(),
+				VolumeLabel: usblabel,
 			}
 
 			m.deviceMutex.Lock()
@@ -323,7 +340,7 @@ func (m *USBMonitor) createCopyJobForDirectory(sourceDirPath, dirTaskID string) 
 	deviceInfo, exists := m.devices[dirTaskID]
 	m.deviceMutex.Unlock()
 
-	destPath := filepath.Join(m.config.Storage.Local.StagingDir, m.generateDestDirName(deviceInfo.VolumeName))
+	destPath := filepath.Join(m.config.Storage.Local.StagingDir, m.generateDestDirName(deviceInfo.VolumeLabel))
 
 	// Call NewJob with its current signature (no db argument)
 	job := jobs.NewJob(jobs.JobTypeCopy, sourceDirPath, destPath)
