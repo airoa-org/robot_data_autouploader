@@ -372,12 +372,11 @@ func (w *CopyWorker) copySingleFileWithProgress(job *Job, sourcePath, destPath s
 func (w *CopyWorker) createUploadJob(copyJob *Job) {
 	// Destination for copy job becomes source for upload job
 	uploadSourcePath := copyJob.Destination
-	// S3 key prefix can be derived from the original source's base name or other metadata
-	s3KeyPrefix := filepath.Base(copyJob.Source) // Example: use the copied directory name as prefix
+	s3KeyPrefix := filepath.Base(copyJob.Destination)
 
 	uploadJob := NewJob(JobTypeUpload, uploadSourcePath, s3KeyPrefix) // NewJob no longer takes db
 	uploadJob.AddMetadata("original_copy_job_id", copyJob.ID)
-	uploadJob.AddMetadata("original_source_path", copyJob.Source) // Keep track of original USB source
+	uploadJob.AddMetadata("original_source_path", copyJob.Destination) // Keep track of original USB source
 
 	// Copy relevant metadata from copyJob if needed
 	if dirName, ok := copyJob.Metadata["directory_name"]; ok {

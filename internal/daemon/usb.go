@@ -47,6 +47,7 @@ type USBDeviceInfo struct {
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`
 	MountPoint  string    `json:"mount_point"`
+	VolumeName  string    `json:"volume_name,omitempty"`
 	Status      USBStatus `json:"status"`
 	JobID       string    `json:"job_id,omitempty"`
 	DetectedAt  time.Time `json:"detected_at"`
@@ -189,7 +190,7 @@ func (m *USBMonitor) checkMountedVolumes() {
 
 		dirEntries, err := os.ReadDir(dataRoot)
 		if err != nil {
-			m.logger.Warnw("Error reading data root directory", "directory", dataRoot, "error", err)
+			m.logger.Debugw("Error reading data root directory", "directory", dataRoot, "error", err)
 			continue
 		}
 
@@ -229,6 +230,7 @@ func (m *USBMonitor) checkMountedVolumes() {
 						ID:          dirTaskID,
 						Name:        dirEntry.Name(),
 						MountPoint:  dirPath, // Source for copy job
+						VolumeName:  volEntry.Name(),
 						Status:      USBStatusCompleted,
 						DetectedAt:  time.Now(), // Or fetch from DB if available
 						CompletedAt: time.Now(),
@@ -243,6 +245,7 @@ func (m *USBMonitor) checkMountedVolumes() {
 				ID:         dirTaskID,
 				Name:       dirEntry.Name(), // This is the directory name, e.g., "dataset1"
 				MountPoint: dirPath,         // Full path to the directory on USB
+				VolumeName: volEntry.Name(), // Volume name, e.g., "USB_DRIVE"
 				Status:     USBStatusDetected,
 				DetectedAt: time.Now(),
 			}
@@ -302,10 +305,25 @@ func (m *USBMonitor) processDirectoryTask(deviceInfo *USBDeviceInfo) {
 	m.createCopyJobForDirectory(deviceInfo.MountPoint, deviceInfo.ID)
 }
 
+// generateDestDirName creates a directory name in the format <timestamp>_<USBDRIVENAME>
+// Example: 20250317085835_WEBLAB02
+func (m *USBMonitor) generateDestDirName(usbName string) string {
+	// Format timestamp as YYYYMMDDHHMMSS
+	timestamp := time.Now().Format("20060102150405")
+
+	// Combine all parts to form the directory name
+	return fmt.Sprintf("%s_%s", timestamp, usbName)
+}
+
 // createCopyJobForDirectory creates a copy job for the specified source directory.
 func (m *USBMonitor) createCopyJobForDirectory(sourceDirPath, dirTaskID string) {
 	dirName := filepath.Base(sourceDirPath)
-	destPath := filepath.Join(m.config.Storage.Local.StagingDir, dirName)
+
+	m.deviceMutex.Lock()
+	deviceInfo, exists := m.devices[dirTaskID]
+	m.deviceMutex.Unlock()
+
+	destPath := filepath.Join(m.config.Storage.Local.StagingDir, m.generateDestDirName(deviceInfo.VolumeName))
 
 	// Call NewJob with its current signature (no db argument)
 	job := jobs.NewJob(jobs.JobTypeCopy, sourceDirPath, destPath)
@@ -313,15 +331,12 @@ func (m *USBMonitor) createCopyJobForDirectory(sourceDirPath, dirTaskID string) 
 	job.AddMetadata("dir_task_id", dirTaskID)
 
 	// Retrieve DetectedAt from the stored deviceInfo to add to metadata
-	m.deviceMutex.Lock()
-	deviceInfo, exists := m.devices[dirTaskID]
 	if exists {
 		job.AddMetadata("detected_at", deviceInfo.DetectedAt.Format(time.RFC3339))
 	} else {
 		job.AddMetadata("detected_at", time.Now().Format(time.RFC3339))
 		m.logger.Warnw("Device info not found in map when creating job metadata for detected_at", "dirTaskID", dirTaskID)
 	}
-	m.deviceMutex.Unlock()
 
 	// Persist the newly created job to the database using SaveJob
 	if err := m.db.SaveJob(job); err != nil {
