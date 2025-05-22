@@ -206,7 +206,7 @@ func (w *CopyWorker) processJob(job *Job) {
 
 	w.logger.Infow("Copy job completed successfully to staging area", "jobID", job.ID, "source", job.Source, "destination", job.Destination)
 
-	if w.config.Storage.Local.RetentionPolicy == "delete_after_upload" {
+	if w.config.Storage.Local.RetentionPolicyOnCopy == "delete" {
 		// Delete the original files/directory from the USB source after successful copy
 		w.logger.Infow("Attempting to delete original data from USB source after successful copy",
 			"jobID", job.ID,

@@ -42,9 +42,10 @@ type S3Config struct {
 
 // LocalConfig contains local storage settings
 type LocalConfig struct {
-	StagingDir      string   `mapstructure:"staging_dir"`
-	RetentionPolicy string   `mapstructure:"retention_policy"`
-	SourcePatterns  []string `mapstructure:"source_patterns"`
+	StagingDir              string   `mapstructure:"staging_dir"`
+	RetentionPolicyOnUpload string   `mapstructure:"retention_policy_on_upload"`
+	RetentionPolicyOnCopy   string   `mapstructure:"retention_policy_on_copy"`
+	SourcePatterns          []string `mapstructure:"source_patterns"`
 }
 
 // USBConfig contains USB detection settings
@@ -159,7 +160,9 @@ func setDefaultValues(v *viper.Viper) {
 	v.SetDefault("storage.s3.secret_key", "") // Re-add default
 	v.SetDefault("storage.s3.region", "us-west-1")
 	v.SetDefault("storage.local.staging_dir", "~/.autoloader/staging")
-	v.SetDefault("storage.local.retention_policy", "delete_after_upload")
+	v.SetDefault("storage.local.retention_policy_on_upload", "")
+	v.SetDefault("storage.local.retention_policy_on_copy", "")
+
 	v.SetDefault("storage.local.source_patterns", []string{
 		"/opt/data/{{.Dir}}/rosbags",
 		"/opt/data/{{.Dir}}",

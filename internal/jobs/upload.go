@@ -210,7 +210,7 @@ func (w *UploadWorker) processJob(job *Job) {
 	w.logger.Infow("Upload job completed", "jobID", job.ID)
 
 	// Delete source from staging if configured
-	if w.config.Storage.Local.RetentionPolicy == "delete_after_upload" || w.config.Storage.Local.RetentionPolicy == "delete_after_staging" {
+	if w.config.Storage.Local.RetentionPolicyOnUpload == "delete" {
 		// Only delete if not the source directory
 		if filepath.Dir(job.Source) != job.Source {
 			err = os.RemoveAll(job.Source)
