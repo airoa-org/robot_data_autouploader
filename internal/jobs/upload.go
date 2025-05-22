@@ -418,7 +418,8 @@ func (w *UploadWorker) uploadFile(job *Job, filePath, s3Key string) error {
 			} else {
 				w.logger.Warnw("File exists in S3 with matching size but different ETag, skipping upload",
 					"jobID", job.ID, "filePath", filePath, "s3Key", finalS3Key, "localETag", localETag, "remoteETag", remoteETag)
-				return nil
+				// Something went wrong, return error
+				return fmt.Errorf("file exists in S3 with matching size but different ETag, skipping upload: %s", finalS3Key)
 
 			}
 		} else {
