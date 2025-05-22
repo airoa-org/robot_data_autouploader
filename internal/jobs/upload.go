@@ -416,24 +416,26 @@ func (w *UploadWorker) uploadFile(job *Job, filePath, s3Key string) error {
 				}
 				return nil // Skip upload
 			} else {
-				w.logger.Infow("File exists in S3 with matching size but different ETag, proceeding with upload",
+				w.logger.Warnw("File exists in S3 with matching size but different ETag, skipping upload",
 					"jobID", job.ID, "filePath", filePath, "s3Key", finalS3Key, "localETag", localETag, "remoteETag", remoteETag)
-				// Proceed to upload
+				return nil
+
 			}
 		} else {
-			w.logger.Infow("File exists in S3 but with different size, proceeding with upload",
+			w.logger.Warnw("File exists in S3 but with different size, skipping upload",
 				"jobID", job.ID, "filePath", filePath, "s3Key", finalS3Key, "localSize", fileInfo.Size(), "remoteSize", remoteSize)
-			// Proceed to upload
+			return nil
+
 		}
 	} else { // Error checking S3 object, or object does not exist
 		var nsk *types.NoSuchKey
 		if errors.As(headErr, &nsk) {
 			w.logger.Infow("File does not exist in S3, proceeding with upload", "jobID", job.ID, "filePath", filePath, "s3Key", finalS3Key)
 		} else {
-			w.logger.Warnw("Error checking S3 for file existence, proceeding with upload",
+			w.logger.Warnw("Error checking S3 for file existence, skipping upload",
 				"jobID", job.ID, "filePath", filePath, "s3Key", finalS3Key, "error", headErr)
+			return nil
 		}
-		// Proceed to upload in both cases (NoSuchKey or other HeadObject error)
 	}
 
 	// If we've reached this point, an upload is required.
