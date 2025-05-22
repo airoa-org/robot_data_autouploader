@@ -199,12 +199,13 @@ func (m *USBMonitor) checkMountedVolumes() {
 			usblabel = strings.TrimSpace(usblabel)
 			m.logger.Debugw("Found USB label", "volumePath", volumePath, "label", usblabel)
 		} else {
-			m.logger.Warnw("No .hsrdata file found or error reading it",
+			m.logger.Debugw("No .hsrdata file found or error reading it",
 				"volumePath", volumePath, "error", err)
 		}
 
 		dirEntries, err := os.ReadDir(dataRoot)
 		if err != nil {
+			// Means that it is not mounted yet
 			m.logger.Debugw("Error reading data root directory", "directory", dataRoot, "error", err)
 			continue
 		}
