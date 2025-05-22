@@ -431,10 +431,12 @@ func (w *UploadWorker) uploadFile(job *Job, filePath, s3Key string) error {
 		var nsk *types.NoSuchKey
 		if errors.As(headErr, &nsk) {
 			w.logger.Infow("File does not exist in S3, proceeding with upload", "jobID", job.ID, "filePath", filePath, "s3Key", finalS3Key)
+		} else if strings.Contains(headErr.Error(), "404") {
+			w.logger.Infow("File does not exist in S3, proceeding with upload", "jobID", job.ID, "filePath", filePath, "s3Key", finalS3Key)
 		} else {
-			w.logger.Warnw("Error checking S3 for file existence, skipping upload",
+			w.logger.Warnw("Error checking S3 for file existence",
 				"jobID", job.ID, "filePath", filePath, "s3Key", finalS3Key, "error", headErr)
-			return nil
+			return fmt.Errorf("error checking S3 for file existence: %w", headErr)
 		}
 	}
 
