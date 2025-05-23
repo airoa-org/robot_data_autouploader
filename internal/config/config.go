@@ -23,7 +23,8 @@ type Config struct {
 
 // DaemonConfig contains settings for the daemon service
 type DaemonConfig struct {
-	DatabasePath string `mapstructure:"database_path"`
+	DatabasePath         string `mapstructure:"database_path"`
+	DisableDirectoryScan bool   `mapstructure:"disable_directory_scan"`
 }
 
 // StorageConfig contains settings for storage (S3 and local)
@@ -225,6 +226,7 @@ func addStructKeys(validKeys map[string]bool, t reflect.Type, prefix string) {
 func setDefaultValues(v *viper.Viper) {
 	// Daemon defaults
 	v.SetDefault("daemon.database_path", "~/.autoloader/jobs.db")
+	v.SetDefault("daemon.disable_directory_scan", false)
 
 	// Storage defaults
 	v.SetDefault("storage.s3.access_key", "") // Re-add default

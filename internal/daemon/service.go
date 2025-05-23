@@ -83,16 +83,24 @@ func (s *Service) Start() error {
 		return fmt.Errorf("failed to initialize workers: %w", err)
 	}
 
-	// Initialize USB monitor
-	if err := s.initUSBMonitor(); err != nil {
-		return fmt.Errorf("failed to initialize USB monitor: %w", err)
+	// Initialize USB monitor (only if directory scanning is not disabled)
+	if !s.config.Daemon.DisableDirectoryScan {
+		if err := s.initUSBMonitor(); err != nil {
+			return fmt.Errorf("failed to initialize USB monitor: %w", err)
+		}
+	} else {
+		s.logger.Info("Directory scanning disabled, skipping USB monitor initialization")
 	}
 
 	// Start workers
 	s.startWorkers()
 
-	// Start USB monitor
-	s.startUSBMonitor()
+	// Start USB monitor (only if directory scanning is not disabled)
+	if !s.config.Daemon.DisableDirectoryScan {
+		s.startUSBMonitor()
+	} else {
+		s.logger.Info("Directory scanning disabled, skipping USB monitor startup")
+	}
 
 	// Start periodic job checker
 	s.startJobChecker()
@@ -109,7 +117,7 @@ func (s *Service) Stop() {
 	// Cancel context to signal all components to stop
 	s.cancelFunc()
 
-	// Stop USB monitor
+	// Stop USB monitor (only if it was initialized)
 	if s.usbMonitor != nil {
 		s.usbMonitor.Stop()
 	}
