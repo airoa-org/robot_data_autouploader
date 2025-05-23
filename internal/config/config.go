@@ -72,9 +72,10 @@ type CopyConfig struct {
 
 // UploadConfig contains S3 upload settings
 type UploadConfig struct {
-	Parallelism  int `mapstructure:"parallelism"`
-	ChunkSizeMb  int `mapstructure:"chunk_size_mb"`
-	ThrottleMbps int `mapstructure:"throttle_mbps"`
+	Parallelism     int      `mapstructure:"parallelism"`
+	ChunkSizeMb     int      `mapstructure:"chunk_size_mb"`
+	ThrottleMbps    int      `mapstructure:"throttle_mbps"`
+	AllowedPatterns []string `mapstructure:"allowed_patterns"` // Only upload files matching these patterns (empty = allow all)
 }
 
 // LoadConfig loads the configuration from the specified file
@@ -256,4 +257,5 @@ func setDefaultValues(v *viper.Viper) {
 	v.SetDefault("upload.parallelism", 1)
 	v.SetDefault("upload.throttle_mbps", 50)
 	v.SetDefault("upload.chunk_size_mb", 8)
+	v.SetDefault("upload.allowed_patterns", []string{}) // Empty = allow all files
 }

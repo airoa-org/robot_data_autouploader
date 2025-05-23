@@ -351,8 +351,40 @@ func calculateS3ETag(filePath string, chunkSizeMb int) (string, error) {
 	return fmt.Sprintf("%x-%d", final, len(md5s)), nil
 }
 
+// isFileAllowed checks if a file matches the allowed patterns
+func (w *UploadWorker) isFileAllowed(filePath string) bool {
+	// If no allowed patterns are configured, allow all files
+	if len(w.config.Upload.AllowedPatterns) == 0 {
+		return true
+	}
+
+	fileName := filepath.Base(filePath)
+
+	// Check if file matches any of the allowed patterns
+	for _, pattern := range w.config.Upload.AllowedPatterns {
+		matched, err := filepath.Match(pattern, fileName)
+		if err != nil {
+			w.logger.Warnw("Invalid allowed pattern", "pattern", pattern, "error", err)
+			continue
+		}
+		if matched {
+			return true
+		}
+	}
+
+	return false
+}
+
 // uploadFile uploads a single file
 func (w *UploadWorker) uploadFile(job *Job, filePath, s3Key string) error {
+	// Check if file is allowed by whitelist
+	if !w.isFileAllowed(filePath) {
+		w.logger.Infow("File not allowed by whitelist, skipping upload",
+			"jobID", job.ID,
+			"filePath", filePath,
+			"allowedPatterns", w.config.Upload.AllowedPatterns)
+		return nil
+	}
 	fileInfo, err := os.Stat(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to get file info for %s: %w", filePath, err)
