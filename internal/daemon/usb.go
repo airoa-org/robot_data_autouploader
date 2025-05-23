@@ -325,9 +325,10 @@ func (m *USBMonitor) processDirectoryTask(deviceInfo *USBDeviceInfo) {
 
 // generateDestDirName creates a directory name in the format <timestamp>_<USBDRIVENAME>
 // Example: 20250317085835_WEBLAB02
+// Timestamp is always in UTC time
 func (m *USBMonitor) generateDestDirName(usbName string) string {
-	// Format timestamp as YYYYMMDDHHMMSS
-	timestamp := time.Now().Format("20060102150405")
+	// Format timestamp as YYYYMMDDHHMMSS in UTC
+	timestamp := time.Now().UTC().Format("20060102150405")
 
 	// Combine all parts to form the directory name
 	return fmt.Sprintf("%s_%s", timestamp, usbName)
