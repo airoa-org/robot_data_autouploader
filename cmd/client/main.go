@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/jobops"
 	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/jobs"
 	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/storage"
 	"github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"go.uber.org/zap"
@@ -48,10 +50,12 @@ const (
 	stateJobList      = "job_list"
 	stateConfirmation = "confirmation"
 	stateMessage      = "message"
+	stateJobDetail    = "job_detail"
 )
 
 type model struct {
 	table              table.Model
+	viewport           viewport.Model
 	db                 *storage.DB
 	width              int
 	height             int
@@ -62,6 +66,7 @@ type model struct {
 	messageStyle       lipgloss.Style
 	messageTimeout     *time.Time
 	jobs               []*jobs.Job
+	viewportReady      bool
 }
 
 type tickMsg struct{}
@@ -91,6 +96,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+
+		// Handle viewport sizing for job detail view
+		if m.state == stateJobDetail {
+			headerHeight := lipgloss.Height(m.detailHeaderView())
+			footerHeight := lipgloss.Height(m.detailFooterView())
+			verticalMarginHeight := headerHeight + footerHeight
+
+			if !m.viewportReady {
+				m.viewport = viewport.New(msg.Width, msg.Height-verticalMarginHeight)
+				m.viewport.YPosition = headerHeight
+				if m.selectedJob != nil {
+					m.viewport.SetContent(m.formatJobDetails(m.selectedJob))
+				}
+				m.viewportReady = true
+			} else {
+				m.viewport.Width = msg.Width
+				m.viewport.Height = msg.Height - verticalMarginHeight
+			}
+		}
+
 		// Fixed columns: ID(10), Type(8), Status(10), Progress(8), plus 6 for table borders/padding
 		fixed := 10 + 8 + 10 + 8 + 6
 		avail := m.width - fixed
@@ -155,6 +180,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "q", "ctrl+c":
 				return m, tea.Quit
 
+			case "enter":
+				// Show job details
+				if len(m.table.SelectedRow()) > 0 {
+					jobID := m.table.SelectedRow()[0]
+					// Load complete job data
+					for _, job := range m.jobs {
+						if job.ID == jobID {
+							m.selectedJob = job
+							break
+						}
+					}
+
+					if m.selectedJob != nil {
+						// Switch to job detail state
+						m.state = stateJobDetail
+						m.viewportReady = false
+						// Trigger window size message to initialize viewport
+						return m, func() tea.Msg {
+							return tea.WindowSizeMsg{Width: m.width, Height: m.height}
+						}
+					}
+				}
+				return m, nil
+
 			case "r":
 				// Only allow recreation of upload jobs
 				if m.table.SelectedRow()[2] == string(jobs.JobTypeUpload) {
@@ -180,6 +229,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 				return m, nil
+			}
+
+		case stateJobDetail:
+			switch msg.String() {
+			case "esc", "q":
+				// Return to job list
+				m.state = stateJobList
+				m.selectedJob = nil
+				m.viewportReady = false
+				return m, nil
+
+			case "ctrl+c":
+				return m, tea.Quit
 			}
 
 		case stateConfirmation:
@@ -235,6 +297,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.table, cmd = m.table.Update(msg)
 	}
 
+	// Handle viewport updates
+	if m.state == stateJobDetail && m.viewportReady {
+		m.viewport, cmd = m.viewport.Update(msg)
+	}
+
 	return m, cmd
 }
 
@@ -254,9 +321,16 @@ func (m model) View() string {
 				infoTextStyle.Render("Press any key to return"),
 		)
 
+	case stateJobDetail:
+		// Show job details in viewport
+		if !m.viewportReady {
+			return "\n  Loading job details..."
+		}
+		return fmt.Sprintf("%s\n%s\n%s", m.detailHeaderView(), m.viewport.View(), m.detailFooterView())
+
 	default: // stateJobList
-		helpText := "Press q to quit"
-		if m.table.SelectedRow()[2] == string(jobs.JobTypeUpload) {
+		helpText := "Press q to quit, enter to view details"
+		if len(m.table.SelectedRow()) > 0 && m.table.SelectedRow()[2] == string(jobs.JobTypeUpload) {
 			helpText += ", r to recreate selected upload job"
 		}
 		return baseStyle.Render(m.table.View()) + "\n" + helpText
@@ -277,6 +351,61 @@ func jobsToRows(jobs []*jobs.Job) []table.Row {
 		})
 	}
 	return rows
+}
+
+// formatJobDetails formats all job information for display in the viewport
+func (m model) formatJobDetails(job *jobs.Job) string {
+	var details strings.Builder
+
+	details.WriteString(fmt.Sprintf("Job ID: %s\n", job.ID))
+	details.WriteString(fmt.Sprintf("Created: %s\n", job.CreatedAt.Format(time.RFC3339)))
+	details.WriteString(fmt.Sprintf("Updated: %s\n", job.UpdatedAt.Format(time.RFC3339)))
+	details.WriteString(fmt.Sprintf("Type: %s\n", job.Type))
+	details.WriteString(fmt.Sprintf("Status: %s\n", job.Status))
+	details.WriteString(fmt.Sprintf("Progress: %.1f%%\n", job.Progress*100))
+	details.WriteString(fmt.Sprintf("Source: %s\n", job.Source))
+	details.WriteString(fmt.Sprintf("Destination: %s\n", job.Destination))
+	details.WriteString(fmt.Sprintf("File Count: %d\n", job.FileCount))
+	details.WriteString(fmt.Sprintf("Total Size: %d bytes\n", job.TotalSize))
+	details.WriteString(fmt.Sprintf("Processed Size: %d bytes\n", job.ProcessedSize))
+
+	if job.ErrorMsg.Valid && job.ErrorMsg.String != "" {
+		details.WriteString(fmt.Sprintf("\nError: %s\n", job.ErrorMsg.String))
+	}
+
+	if len(job.Metadata) > 0 {
+		details.WriteString("\nMetadata:\n")
+		for key, value := range job.Metadata {
+			details.WriteString(fmt.Sprintf("  %s: %s\n", key, value))
+		}
+	}
+
+	// Add some spacing at the end
+	details.WriteString("\n\n")
+
+	return details.String()
+}
+
+// detailHeaderView creates the header for the job detail viewport
+func (m model) detailHeaderView() string {
+	title := titleStyle.Render("Job Details")
+	line := strings.Repeat("─", max(0, m.viewport.Width-lipgloss.Width(title)))
+	return lipgloss.JoinHorizontal(lipgloss.Center, title, line)
+}
+
+// detailFooterView creates the footer for the job detail viewport
+func (m model) detailFooterView() string {
+	info := infoTextStyle.Render(fmt.Sprintf("%3.f%% • Press esc to return", m.viewport.ScrollPercent()*100))
+	line := strings.Repeat("─", max(0, m.viewport.Width-lipgloss.Width(info)))
+	return lipgloss.JoinHorizontal(lipgloss.Center, line, info)
+}
+
+// max returns the maximum of two integers
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // recreateJob recreates a job from the original job ID and ensures it will be picked up for processing
