@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	appconfig "github.com/airoa-org/robot_data_pipeline/autoloader/internal/config"
 	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/jobs"
@@ -91,6 +92,9 @@ func (s *Service) Start() error {
 
 	// Start USB monitor
 	s.startUSBMonitor()
+
+	// Start periodic job checker
+	s.startJobChecker()
 
 	s.logger.Info("Daemon service started")
 
@@ -368,4 +372,135 @@ func (s *Service) cleanupInterruptedJobs() error {
 
 	s.logger.Infow("Completed cleanup of interrupted jobs", "count", len(interruptedJobs))
 	return nil
+}
+
+// startJobChecker starts a goroutine that periodically checks for new jobs in the database
+// and adds them to the appropriate queue
+func (s *Service) startJobChecker() {
+	s.logger.Info("Starting periodic job checker")
+
+	// Start job checker in a goroutine
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+
+		// Check for new jobs every 5 seconds
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-s.ctx.Done():
+				s.logger.Info("Job checker stopped")
+				return
+			case <-ticker.C:
+				if err := s.checkForNewJobs(); err != nil {
+					s.logger.Warnw("Failed to check for new jobs", "error", err)
+				}
+			}
+		}
+	}()
+
+	s.logger.Info("Job checker started")
+}
+
+// checkForNewJobs checks for new jobs in the database and adds them to the appropriate queue
+func (s *Service) checkForNewJobs() error {
+	// Check for new copy jobs
+	copyJobs, err := s.db.GetPendingJobs(jobs.JobTypeCopy)
+	if err != nil {
+		return fmt.Errorf("failed to get pending copy jobs: %w", err)
+	}
+
+	// Enqueue new copy jobs that aren't already in the queue
+	for _, job := range copyJobs {
+		// Check if job is already in the queue
+		_, err := s.copyQueue.FindJob(job.ID)
+		if err == jobs.ErrJobNotFound {
+			// Job not in queue, add it
+			if err := s.copyQueue.Enqueue(job); err != nil {
+				s.logger.Warnw("Failed to enqueue copy job",
+					"jobID", job.ID,
+					"error", err)
+			} else {
+				s.logger.Infow("Added new copy job to queue", "jobID", job.ID)
+			}
+		}
+	}
+
+	// Check for new upload jobs
+	uploadJobs, err := s.db.GetPendingJobs(jobs.JobTypeUpload)
+	if err != nil {
+		return fmt.Errorf("failed to get pending upload jobs: %w", err)
+	}
+
+	// Enqueue new upload jobs that aren't already in the queue
+	for _, job := range uploadJobs {
+		// Check if job is already in the queue
+		_, err := s.uploadQueue.FindJob(job.ID)
+		if err == jobs.ErrJobNotFound {
+			// Job not in queue, add it
+			if err := s.uploadQueue.Enqueue(job); err != nil {
+				s.logger.Warnw("Failed to enqueue upload job",
+					"jobID", job.ID,
+					"error", err)
+			} else {
+				s.logger.Infow("Added new upload job to queue", "jobID", job.ID)
+			}
+		}
+	}
+
+	return nil
+}
+
+// RecreateUploadJob recreates an upload job and adds it to the upload queue
+// This ensures the job is both saved to the database and added to the queue for processing
+func (s *Service) RecreateUploadJob(originalJobID string) (*jobs.Job, error) {
+	s.logger.Infow("Recreating upload job", "originalJobID", originalJobID)
+
+	// Get the original job
+	originalJob, err := s.db.GetJob(originalJobID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get original job: %w", err)
+	}
+
+	// Validate that this is an upload job
+	if originalJob.Type != jobs.JobTypeUpload {
+		return nil, fmt.Errorf("can only recreate upload jobs, but job %s is of type %s", originalJobID, originalJob.Type)
+	}
+
+	// Create a new job with the same source and destination
+	newJob := jobs.NewJob(jobs.JobTypeUpload, originalJob.Source, originalJob.Destination)
+
+	// Copy relevant metadata from the original job
+	for k, v := range originalJob.Metadata {
+		newJob.AddMetadata(k, v)
+	}
+
+	// Add reference to the original job
+	newJob.AddMetadata("recreated_from", originalJobID)
+	newJob.AddMetadata("recreated_at", time.Now().Format(time.RFC3339))
+	newJob.AddMetadata("manually_recreated_at", time.Now().Format(time.RFC3339))
+
+	// Ensure job status is set to queued
+	newJob.UpdateStatus(jobs.JobStatusQueued)
+	newJob.UpdateProgress(0.0)
+
+	// Save the new job to the database
+	if err := s.db.SaveJob(newJob); err != nil {
+		return nil, fmt.Errorf("failed to save recreated job: %w", err)
+	}
+
+	// Add the job to the upload queue
+	if err := s.uploadQueue.Enqueue(newJob); err != nil {
+		return nil, fmt.Errorf("failed to enqueue recreated job: %w", err)
+	}
+
+	s.logger.Infow("Successfully recreated and enqueued upload job",
+		"originalJobID", originalJobID,
+		"newJobID", newJob.ID,
+		"source", newJob.Source,
+		"destination", newJob.Destination)
+
+	return newJob, nil
 }
