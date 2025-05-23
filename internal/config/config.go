@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
@@ -117,6 +119,11 @@ func LoadConfig(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("unable to decode config: %w", err)
 	}
 
+	// Check for unused configuration keys
+	if err := checkUnusedKeys(v); err != nil {
+		return nil, err
+	}
+
 	// Expand environment variables and home directory in paths
 	expandPaths(&config)
 
@@ -148,6 +155,69 @@ func expandPath(path string) string {
 	}
 
 	return expanded
+}
+
+// checkUnusedKeys validates that all keys in the config file are actually used
+func checkUnusedKeys(v *viper.Viper) error {
+	// Get all keys that were loaded from the config file
+	allKeys := v.AllKeys()
+
+	// Get all valid keys based on our struct definitions
+	validKeys := getValidConfigKeys()
+
+	// Find any keys that are present but not valid
+	var unusedKeys []string
+	for _, key := range allKeys {
+		if !validKeys[key] {
+			unusedKeys = append(unusedKeys, key)
+		}
+	}
+
+	// Return error if there are unused keys
+	if len(unusedKeys) > 0 {
+		return fmt.Errorf("unused configuration keys found: %s", strings.Join(unusedKeys, ", "))
+	}
+
+	return nil
+}
+
+// getValidConfigKeys returns all valid configuration keys based on struct tags
+func getValidConfigKeys() map[string]bool {
+	validKeys := make(map[string]bool)
+
+	// Add all valid keys from the Config struct and its nested structs
+	addStructKeys(validKeys, reflect.TypeOf(Config{}), "")
+
+	return validKeys
+}
+
+// addStructKeys recursively adds all mapstructure keys from a struct type
+func addStructKeys(validKeys map[string]bool, t reflect.Type, prefix string) {
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		tag := field.Tag.Get("mapstructure")
+
+		if tag == "" || tag == "-" {
+			continue
+		}
+
+		// Build the full key path
+		var fullKey string
+		if prefix == "" {
+			fullKey = tag
+		} else {
+			fullKey = prefix + "." + tag
+		}
+
+		// Add this key as valid
+		validKeys[fullKey] = true
+
+		// If this field is a struct, recursively add its keys
+		fieldType := field.Type
+		if fieldType.Kind() == reflect.Struct {
+			addStructKeys(validKeys, fieldType, fullKey)
+		}
+	}
 }
 
 // setDefaultValues sets the default configuration values
