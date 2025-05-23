@@ -37,23 +37,9 @@ type UploadWorker struct {
 func NewUploadWorker(queue *Queue, cfg *appconfig.Config, persister JobPersister, logger *zap.SugaredLogger) *UploadWorker { // Added persister parameter
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Create custom AWS config resolver
-	customResolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-		if cfg.Storage.S3.Endpoint != "" {
-			return aws.Endpoint{
-				URL:               cfg.Storage.S3.Endpoint,
-				HostnameImmutable: true,
-				SigningRegion:     cfg.Storage.S3.Region,
-			}, nil
-		}
-		// Fallback to default resolver
-		return aws.Endpoint{}, &aws.EndpointNotFoundError{}
-	})
-
 	// Create AWS config
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion(cfg.Storage.S3.Region),
-		awsconfig.WithEndpointResolverWithOptions(customResolver),
 		awsconfig.WithCredentialsProvider(
 			credentials.NewStaticCredentialsProvider(
 				cfg.Storage.S3.AccessKey,
@@ -76,8 +62,17 @@ func NewUploadWorker(queue *Queue, cfg *appconfig.Config, persister JobPersister
 		}
 	}
 
-	// Create S3 client
-	s3Client := s3.NewFromConfig(awsCfg)
+	// Create S3 client with custom endpoint if specified
+	var s3Client *s3.Client
+	if cfg.Storage.S3.Endpoint != "" {
+		// Use BaseEndpoint for custom endpoints (replaces deprecated EndpointResolver)
+		s3Client = s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+			o.BaseEndpoint = aws.String(cfg.Storage.S3.Endpoint)
+			o.UsePathStyle = true // Often needed for custom S3-compatible endpoints
+		})
+	} else {
+		s3Client = s3.NewFromConfig(awsCfg)
+	}
 
 	// Create uploader with custom transfer manager
 	uploader := manager.NewUploader(s3Client, func(u *manager.Uploader) {
@@ -414,7 +409,7 @@ func (w *UploadWorker) uploadFile(job *Job, filePath, s3Key string) error {
 				if errDb := w.persister.SaveJob(job); errDb != nil {
 					w.logger.Warnw("Failed to save job state to DB after deduplication skip", "jobID", job.ID, "error", errDb)
 				}
-				return nil // Skip upload
+				return fmt.Errorf("file already exists in S3 with matching size and ETag, skipping upload: %s", finalS3Key)
 			} else {
 				w.logger.Warnw("File exists in S3 with matching size but different ETag, skipping upload",
 					"jobID", job.ID, "filePath", filePath, "s3Key", finalS3Key, "localETag", localETag, "remoteETag", remoteETag)
@@ -425,7 +420,7 @@ func (w *UploadWorker) uploadFile(job *Job, filePath, s3Key string) error {
 		} else {
 			w.logger.Warnw("File exists in S3 but with different size, skipping upload",
 				"jobID", job.ID, "filePath", filePath, "s3Key", finalS3Key, "localSize", fileInfo.Size(), "remoteSize", remoteSize)
-			return nil
+			return fmt.Errorf("file exists in S3 but with different size, skipping upload: %s", finalS3Key)
 
 		}
 	} else { // Error checking S3 object, or object does not exist
