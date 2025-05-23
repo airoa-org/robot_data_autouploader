@@ -9,6 +9,7 @@ import (
 	"time"
 
 	appconfig "github.com/airoa-org/robot_data_pipeline/autoloader/internal/config"
+	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/jobops"
 	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/jobs"
 	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/storage"
 	"go.uber.org/zap"
@@ -458,37 +459,18 @@ func (s *Service) checkForNewJobs() error {
 func (s *Service) RecreateUploadJob(originalJobID string) (*jobs.Job, error) {
 	s.logger.Infow("Recreating upload job", "originalJobID", originalJobID)
 
-	// Get the original job
-	originalJob, err := s.db.GetJob(originalJobID)
+	// Use the shared job recreation logic
+	newJob, err := jobops.RecreateUploadJob(s.db, originalJobID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get original job: %w", err)
+		return nil, err
 	}
 
-	// Validate that this is an upload job
-	if originalJob.Type != jobs.JobTypeUpload {
-		return nil, fmt.Errorf("can only recreate upload jobs, but job %s is of type %s", originalJobID, originalJob.Type)
-	}
-
-	// Create a new job with the same source and destination
-	newJob := jobs.NewJob(jobs.JobTypeUpload, originalJob.Source, originalJob.Destination)
-
-	// Copy relevant metadata from the original job
-	for k, v := range originalJob.Metadata {
-		newJob.AddMetadata(k, v)
-	}
-
-	// Add reference to the original job
-	newJob.AddMetadata("recreated_from", originalJobID)
-	newJob.AddMetadata("recreated_at", time.Now().Format(time.RFC3339))
+	// Add daemon-specific metadata
 	newJob.AddMetadata("manually_recreated_at", time.Now().Format(time.RFC3339))
 
-	// Ensure job status is set to queued
-	newJob.UpdateStatus(jobs.JobStatusQueued)
-	newJob.UpdateProgress(0.0)
-
-	// Save the new job to the database
+	// Save the updated job back to the database
 	if err := s.db.SaveJob(newJob); err != nil {
-		return nil, fmt.Errorf("failed to save recreated job: %w", err)
+		return nil, fmt.Errorf("failed to update recreated job: %w", err)
 	}
 
 	// Add the job to the upload queue
