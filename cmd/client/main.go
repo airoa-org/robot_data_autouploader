@@ -107,12 +107,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewport = viewport.New(msg.Width, msg.Height-verticalMarginHeight)
 				m.viewport.YPosition = headerHeight
 				if m.selectedJob != nil {
-					m.viewport.SetContent(m.formatJobDetails(m.selectedJob))
+					m.viewport.SetContent(m.formatJobDetailsWrapped(m.selectedJob, msg.Width))
 				}
 				m.viewportReady = true
 			} else {
 				m.viewport.Width = msg.Width
 				m.viewport.Height = msg.Height - verticalMarginHeight
+				// Update content with new width for proper wrapping
+				if m.selectedJob != nil {
+					m.viewport.SetContent(m.formatJobDetailsWrapped(m.selectedJob, msg.Width))
+				}
 			}
 		}
 
@@ -353,30 +357,37 @@ func jobsToRows(jobs []*jobs.Job) []table.Row {
 	return rows
 }
 
-// formatJobDetails formats all job information for display in the viewport
-func (m model) formatJobDetails(job *jobs.Job) string {
+// formatJobDetailsWrapped formats all job information for display in the viewport with line wrapping
+func (m model) formatJobDetailsWrapped(job *jobs.Job, width int) string {
 	var details strings.Builder
 
-	details.WriteString(fmt.Sprintf("Job ID: %s\n", job.ID))
-	details.WriteString(fmt.Sprintf("Created: %s\n", job.CreatedAt.Format(time.RFC3339)))
-	details.WriteString(fmt.Sprintf("Updated: %s\n", job.UpdatedAt.Format(time.RFC3339)))
-	details.WriteString(fmt.Sprintf("Type: %s\n", job.Type))
-	details.WriteString(fmt.Sprintf("Status: %s\n", job.Status))
-	details.WriteString(fmt.Sprintf("Progress: %.1f%%\n", job.Progress*100))
-	details.WriteString(fmt.Sprintf("Source: %s\n", job.Source))
-	details.WriteString(fmt.Sprintf("Destination: %s\n", job.Destination))
-	details.WriteString(fmt.Sprintf("File Count: %d\n", job.FileCount))
-	details.WriteString(fmt.Sprintf("Total Size: %d bytes\n", job.TotalSize))
-	details.WriteString(fmt.Sprintf("Processed Size: %d bytes\n", job.ProcessedSize))
+	// Calculate available width for content (accounting for padding and borders)
+	contentWidth := width - 4 // Leave some margin
+	if contentWidth < 20 {
+		contentWidth = 20 // Minimum width
+	}
+
+	details.WriteString(wrapText(fmt.Sprintf("Job ID: %s", job.ID), contentWidth) + "\n")
+	details.WriteString(wrapText(fmt.Sprintf("Created: %s", job.CreatedAt.Format(time.RFC3339)), contentWidth) + "\n")
+	details.WriteString(wrapText(fmt.Sprintf("Updated: %s", job.UpdatedAt.Format(time.RFC3339)), contentWidth) + "\n")
+	details.WriteString(wrapText(fmt.Sprintf("Type: %s", job.Type), contentWidth) + "\n")
+	details.WriteString(wrapText(fmt.Sprintf("Status: %s", job.Status), contentWidth) + "\n")
+	details.WriteString(wrapText(fmt.Sprintf("Progress: %.1f%%", job.Progress*100), contentWidth) + "\n")
+	details.WriteString(wrapText(fmt.Sprintf("Source: %s", job.Source), contentWidth) + "\n")
+	details.WriteString(wrapText(fmt.Sprintf("Destination: %s", job.Destination), contentWidth) + "\n")
+	details.WriteString(wrapText(fmt.Sprintf("File Count: %d", job.FileCount), contentWidth) + "\n")
+	details.WriteString(wrapText(fmt.Sprintf("Total Size: %d bytes", job.TotalSize), contentWidth) + "\n")
+	details.WriteString(wrapText(fmt.Sprintf("Processed Size: %d bytes", job.ProcessedSize), contentWidth) + "\n")
 
 	if job.ErrorMsg.Valid && job.ErrorMsg.String != "" {
-		details.WriteString(fmt.Sprintf("\nError: %s\n", job.ErrorMsg.String))
+		details.WriteString("\n")
+		details.WriteString(wrapText(fmt.Sprintf("Error: %s", job.ErrorMsg.String), contentWidth) + "\n")
 	}
 
 	if len(job.Metadata) > 0 {
 		details.WriteString("\nMetadata:\n")
 		for key, value := range job.Metadata {
-			details.WriteString(fmt.Sprintf("  %s: %s\n", key, value))
+			details.WriteString(wrapText(fmt.Sprintf("  %s: %s", key, value), contentWidth) + "\n")
 		}
 	}
 
@@ -384,6 +395,33 @@ func (m model) formatJobDetails(job *jobs.Job) string {
 	details.WriteString("\n\n")
 
 	return details.String()
+}
+
+// wrapText wraps text to fit within the specified width
+func wrapText(text string, width int) string {
+	if len(text) <= width {
+		return text
+	}
+
+	var result strings.Builder
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return text
+	}
+
+	currentLine := words[0]
+
+	for _, word := range words[1:] {
+		if len(currentLine)+1+len(word) <= width {
+			currentLine += " " + word
+		} else {
+			result.WriteString(currentLine + "\n")
+			currentLine = word
+		}
+	}
+
+	result.WriteString(currentLine)
+	return result.String()
 }
 
 // detailHeaderView creates the header for the job detail viewport
