@@ -28,6 +28,14 @@ It must point to the same database as the daemon.
 go run cmd/client/main.go --db <path_to_db_file>
 ```
 
+#### Screenshots 
+<img width="1509" alt="Screenshot 2025-05-26 at 19 04 52" src="https://github.com/user-attachments/assets/63056938-aedf-4d5f-915f-67a3c379b80c" />
+
+<img width="1505" alt="Screenshot 2025-05-26 at 19 05 05" src="https://github.com/user-attachments/assets/d65ee0bc-d01f-4a59-b006-965d2b8772db" />
+
+<img width="631" alt="Screenshot 2025-05-26 at 19 05 14" src="https://github.com/user-attachments/assets/32c78075-c8a6-4d20-8278-2f94b2c68c57" />
+
+
 ## Building
 
 ### On MacOS
