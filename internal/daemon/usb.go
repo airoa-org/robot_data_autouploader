@@ -228,34 +228,8 @@ func (m *USBMonitor) checkMountedVolumes() {
 			}
 			m.deviceMutex.Unlock()
 
-			// Check DB if this directory has been successfully copied before
-			copied, err := m.isDirCopied(dirPath)
-			if err != nil {
-				m.logger.Errorw("Failed to check DB for directory copy status", "dirPath", dirPath, "error", err)
-				continue // Skip this directory if DB check fails
-			}
-			if copied {
-				m.logger.Infow("Directory already copied successfully (found in DB)", "dirPath", dirPath)
-				// Update internal status to completed to prevent re-processing in this session
-				m.deviceMutex.Lock()
-				if devInfo, exists := m.devices[dirTaskID]; exists {
-					devInfo.Status = USBStatusCompleted
-					devInfo.CompletedAt = time.Now()
-				} else {
-					m.devices[dirTaskID] = &USBDeviceInfo{
-						ID:          dirTaskID,
-						Name:        dirEntry.Name(),
-						MountPoint:  dirPath, // Source for copy job
-						VolumeName:  volEntry.Name(),
-						Status:      USBStatusCompleted,
-						DetectedAt:  time.Now(), // Or fetch from DB if available
-						CompletedAt: time.Now(),
-						VolumeLabel: usblabel,
-					}
-				}
-				m.deviceMutex.Unlock()
-				continue
-			}
+			// Note: We no longer do a preliminary DB check here since we'll do a more precise
+			// check in processDirectoryTask that includes both source and destination paths
 
 			m.logger.Infow("New or previously failed/unprocessed directory detected for processing", "dirPath", dirPath)
 			deviceInfo := &USBDeviceInfo{
@@ -282,17 +256,17 @@ func (m *USBMonitor) checkMountedVolumes() {
 	}
 }
 
-// isDirCopied checks the database to see if a directory has already been successfully copied.
-func (m *USBMonitor) isDirCopied(dirPath string) (bool, error) {
+// isDirCopiedToDestination checks the database to see if a directory has already been 
+// successfully copied to the specific destination path.
+func (m *USBMonitor) isDirCopiedToDestination(sourcePath, destPath string) (bool, error) {
 	if m.db == nil {
-		m.logger.Error("DB instance is nil in USBMonitor, cannot check if directory is copied")
+		m.logger.Error("DB instance is nil in USBMonitor, cannot check if directory is copied to destination")
 		return false, fmt.Errorf("database connection not available")
 	}
 
-	// Use the new HasSuccessfullyCopiedJob method from storage.DB
-	copied, err := m.db.HasSuccessfullyCopiedJob(dirPath)
+	// Use the enhanced method that checks both source and destination
+	copied, err := m.db.HasSuccessfullyCopiedJobToDestination(sourcePath, destPath)
 	if err != nil {
-		// The error from HasSuccessfullyCopiedJob is already logged and wrapped
 		return false, err
 	}
 	return copied, nil
@@ -319,8 +293,31 @@ func (m *USBMonitor) processDirectoryTask(deviceInfo *USBDeviceInfo) {
 	}
 	m.deviceMutex.Unlock()
 
+	// Generate the destination directory name
+	destDirName := m.generateDestDirName(deviceInfo.VolumeLabel)
+	destPath := filepath.Join(m.config.Storage.Local.StagingDir, destDirName)
+
+	// Check if this specific source-destination combination has already been copied
+	copied, err := m.isDirCopiedToDestination(deviceInfo.MountPoint, destPath)
+	if err != nil {
+		m.logger.Errorw("Failed to check if directory is already copied to destination", 
+			"source", deviceInfo.MountPoint, "destination", destPath, "error", err)
+		// Continue with copy job creation despite the error
+	} else if copied {
+		m.logger.Infow("Directory already copied to this destination (found in DB)", 
+			"source", deviceInfo.MountPoint, "destination", destPath)
+		// Update internal status to completed
+		m.deviceMutex.Lock()
+		if dev, exists := m.devices[deviceInfo.ID]; exists {
+			dev.Status = USBStatusCompleted
+			dev.CompletedAt = time.Now()
+		}
+		m.deviceMutex.Unlock()
+		return
+	}
+
 	// The source for the copy job is the MountPoint of the deviceInfo, which is the directory path.
-	m.createCopyJobForDirectory(deviceInfo.MountPoint, deviceInfo.ID)
+	m.createCopyJobForDirectory(deviceInfo.MountPoint, deviceInfo.ID, destPath)
 }
 
 // generateDestDirName creates a directory name in the format <timestamp>_<USBDRIVENAME>
@@ -335,14 +332,8 @@ func (m *USBMonitor) generateDestDirName(usbName string) string {
 }
 
 // createCopyJobForDirectory creates a copy job for the specified source directory.
-func (m *USBMonitor) createCopyJobForDirectory(sourceDirPath, dirTaskID string) {
+func (m *USBMonitor) createCopyJobForDirectory(sourceDirPath, dirTaskID, destPath string) {
 	dirName := filepath.Base(sourceDirPath)
-
-	m.deviceMutex.Lock()
-	deviceInfo, exists := m.devices[dirTaskID]
-	m.deviceMutex.Unlock()
-
-	destPath := filepath.Join(m.config.Storage.Local.StagingDir, m.generateDestDirName(deviceInfo.VolumeLabel))
 
 	// Call NewJob with its current signature (no db argument)
 	job := jobs.NewJob(jobs.JobTypeCopy, sourceDirPath, destPath)
@@ -350,6 +341,10 @@ func (m *USBMonitor) createCopyJobForDirectory(sourceDirPath, dirTaskID string) 
 	job.AddMetadata("dir_task_id", dirTaskID)
 
 	// Retrieve DetectedAt from the stored deviceInfo to add to metadata
+	m.deviceMutex.Lock()
+	deviceInfo, exists := m.devices[dirTaskID]
+	m.deviceMutex.Unlock()
+	
 	if exists {
 		job.AddMetadata("detected_at", deviceInfo.DetectedAt.Format(time.RFC3339))
 	} else {
