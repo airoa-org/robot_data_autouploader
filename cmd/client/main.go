@@ -18,6 +18,8 @@ import (
 	"go.uber.org/zap"
 )
 
+var version = "dev"
+
 // Define UI styles
 var (
 	baseStyle = lipgloss.NewStyle().
@@ -473,7 +475,13 @@ func recreateJob(db *storage.DB, originalJobID string) (*jobs.Job, error) {
 func main() {
 	// Parse flags
 	dbPath := flag.String("db", "autoloader.db", "Path to SQLite database")
+	showVersion := flag.Bool("v", false, "Show version information")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		os.Exit(0)
+	}
 
 	// Set up logger
 	logger, err := zap.NewDevelopment()

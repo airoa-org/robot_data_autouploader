@@ -30,11 +30,11 @@ jobs:
     
     - name: Build daemon
       run: |
-        CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o robot-data-daemon-linux-x86_64 ./cmd/daemon/main.go
+        CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=$(git rev-parse HEAD)" -o robot-data-daemon-linux-x86_64 ./cmd/daemon/main.go
     
     - name: Build client
       run: |
-        CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o robot-data-client-linux-x86_64 ./cmd/client/main.go
+        CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=$(git rev-parse HEAD)" -o robot-data-client-linux-x86_64 ./cmd/client/main.go
     
     - name: Create Release for Tag
       uses: softprops/action-gh-release@v2.2.2

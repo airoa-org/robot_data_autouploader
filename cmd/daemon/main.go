@@ -11,10 +11,18 @@ import (
 	"go.uber.org/zap"
 )
 
+var version = "dev"
+
 func main() {
 	// Parse command-line flags
 	configPath := flag.String("config", "", "Path to configuration file")
+	showVersion := flag.Bool("v", false, "Show version information")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		os.Exit(0)
+	}
 
 	// Create logger
 	logger, err := zap.NewProduction()
