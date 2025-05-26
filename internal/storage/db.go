@@ -352,19 +352,21 @@ func (d *DB) GetPendingJobs(jobType j.JobType) ([]*j.Job, error) { // Use alias 
 	return jobsList, nil
 }
 
-// HasSuccessfullyCopiedJob checks if a copy job for the given source path
-// has been completed successfully.
-func (d *DB) HasSuccessfullyCopiedJob(sourcePath string) (bool, error) {
+// HasSuccessfullyCopiedJobToDestination checks if a copy job for the given source path
+// has been completed successfully to the specific destination path.
+func (d *DB) HasSuccessfullyCopiedJobToDestination(sourcePath, destPath string) (bool, error) {
 	var count int
-	query := `SELECT COUNT(*) FROM jobs WHERE type = ? AND source = ? AND status = ?`
-	err := d.db.QueryRow(query, j.JobTypeCopy, sourcePath, j.JobStatusDone).Scan(&count) // Use alias j.JobTypeCopy, j.JobStatusDone
+	query := `SELECT COUNT(*) FROM jobs WHERE type = ? AND source = ? AND destination = ? AND status = ?`
+	err := d.db.QueryRow(query, j.JobTypeCopy, sourcePath, destPath, j.JobStatusDone).Scan(&count)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return false, nil
 		}
-		d.logger.Errorw("Failed to query for successfully copied job", "sourcePath", sourcePath, "error", err)
-		return false, fmt.Errorf("failed to query jobs table for source '%s': %w", sourcePath, err)
+		d.logger.Errorw("Failed to query for successfully copied job to destination", 
+			"sourcePath", sourcePath, "destPath", destPath, "error", err)
+		return false, fmt.Errorf("failed to query jobs table for source '%s' and destination '%s': %w", 
+			sourcePath, destPath, err)
 	}
 	return count > 0, nil
 }
