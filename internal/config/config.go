@@ -45,10 +45,9 @@ type S3Config struct {
 
 // LocalConfig contains local storage settings
 type LocalConfig struct {
-	StagingDir              string   `mapstructure:"staging_dir"`
-	RetentionPolicyOnUpload string   `mapstructure:"retention_policy_on_upload"`
-	RetentionPolicyOnCopy   string   `mapstructure:"retention_policy_on_copy"`
-	SourcePatterns          []string `mapstructure:"source_patterns"`
+	StagingDir              string `mapstructure:"staging_dir"`
+	RetentionPolicyOnUpload string `mapstructure:"retention_policy_on_upload"`
+	RetentionPolicyOnCopy   string `mapstructure:"retention_policy_on_copy"`
 }
 
 // USBConfig contains USB detection settings
@@ -136,11 +135,6 @@ func LoadConfig(configPath string) (*Config, error) {
 func expandPaths(config *Config) {
 	config.Daemon.DatabasePath = expandPath(config.Daemon.DatabasePath)
 	config.Storage.Local.StagingDir = expandPath(config.Storage.Local.StagingDir)
-
-	// Expand source patterns
-	for i, pattern := range config.Storage.Local.SourcePatterns {
-		config.Storage.Local.SourcePatterns[i] = expandPath(pattern)
-	}
 }
 
 // expandPath expands environment variables and ~ in a file path
@@ -236,11 +230,6 @@ func setDefaultValues(v *viper.Viper) {
 	v.SetDefault("storage.local.retention_policy_on_upload", "")
 	v.SetDefault("storage.local.retention_policy_on_copy", "")
 
-	v.SetDefault("storage.local.source_patterns", []string{
-		"/opt/data/{{.Dir}}/rosbags",
-		"/opt/data/{{.Dir}}",
-	})
-
 	// USB defaults
 	v.SetDefault("usb.ignored_patterns", []string{"SYSTEM*", ".*"})
 	v.SetDefault("usb.scan_interval_ms", 500)
@@ -259,5 +248,5 @@ func setDefaultValues(v *viper.Viper) {
 	v.SetDefault("upload.parallelism", 1)
 	v.SetDefault("upload.throttle_mbps", 50)
 	v.SetDefault("upload.chunk_size_mb", 8)
-	v.SetDefault("upload.allowed_patterns", []string{}) // Empty = allow all files
+	v.SetDefault("upload.allowed_patterns", []string{"data.bag", "meta.json"}) // Empty = allow all files
 }
