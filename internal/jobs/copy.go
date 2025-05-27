@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -365,6 +366,12 @@ func (w *CopyWorker) copySingleFileWithProgress(job *Job, sourcePath, destPath s
 	if written != fileSize {
 		return fmt.Errorf("copy incomplete: copied %d bytes, expected %d", written, fileSize)
 	}
+
+	// Verify file integrity by comparing hashes
+	if err := w.verifyFileHash(sourcePath, destPath); err != nil {
+		return fmt.Errorf("hash verification failed: %w", err)
+	}
+
 	return nil
 }
 
@@ -501,4 +508,39 @@ func (w *CopyWorker) hasEnoughDiskSpace(sourcePath string, destPath string) (boo
 	// Available space must be greater than required space AND
 	// remaining ratio after copy must be greater than minimum ratio
 	return availableSpace >= requiredSpace && remainingRatio >= minFreeSpaceRatio, nil
+}
+
+// verifyFileHash computes and compares SHA256 hashes of source and destination files
+func (w *CopyWorker) verifyFileHash(sourcePath, destPath string) error {
+	sourceHash, err := w.computeFileHash(sourcePath)
+	if err != nil {
+		return fmt.Errorf("failed to compute source file hash: %w", err)
+	}
+
+	destHash, err := w.computeFileHash(destPath)
+	if err != nil {
+		return fmt.Errorf("failed to compute destination file hash: %w", err)
+	}
+
+	if sourceHash != destHash {
+		return fmt.Errorf("hash mismatch: source=%s, dest=%s", sourceHash, destHash)
+	}
+
+	return nil
+}
+
+// computeFileHash computes the SHA256 hash of a file
+func (w *CopyWorker) computeFileHash(filePath string) (string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", fmt.Errorf("failed to compute hash: %w", err)
+	}
+
+	return fmt.Sprintf("%x", hash.Sum(nil)), nil
 }
