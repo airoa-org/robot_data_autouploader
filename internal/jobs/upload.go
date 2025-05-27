@@ -544,7 +544,14 @@ func (w *UploadWorker) uploadFile(job *Job, filePath, s3Key string) error {
 		return fmt.Errorf("failed to upload file %s to S3: %w", filePath, err)
 	}
 
-	w.logger.Infow("S3 upload completed successfully", "jobID", job.ID, "filePath", filePath, "s3Key", finalS3Key)
+	w.logger.Infow("S3 upload completed, verifying integrity", "jobID", job.ID, "filePath", filePath, "s3Key", finalS3Key)
+
+	// Verify upload integrity by comparing size and ETag
+	if err := w.verifyUploadIntegrity(filePath, finalS3Key, fileInfo.Size()); err != nil {
+		return fmt.Errorf("upload verification failed for %s: %w", filePath, err)
+	}
+
+	w.logger.Infow("S3 upload completed and verified successfully", "jobID", job.ID, "filePath", filePath, "s3Key", finalS3Key)
 
 	// Create a .upload_complete marker file in the same directory
 	markerKey := filepath.ToSlash(filepath.Dir(finalS3Key))
@@ -657,4 +664,57 @@ func (r *throttledReader) Read(p []byte) (n int, err error) {
 	}
 
 	return n, err
+}
+
+// verifyUploadIntegrity verifies that the uploaded file matches the local file by comparing size and ETag
+func (w *UploadWorker) verifyUploadIntegrity(localFilePath, s3Key string, expectedSize int64) error {
+	// Get remote object metadata
+	headInput := &s3.HeadObjectInput{
+		Bucket: aws.String(w.config.Storage.S3.Bucket),
+		Key:    aws.String(s3Key),
+	}
+	
+	headOutput, err := w.s3Client.HeadObject(w.ctx, headInput)
+	if err != nil {
+		return fmt.Errorf("failed to get remote object metadata: %w", err)
+	}
+
+	// Verify size
+	var remoteSize int64
+	if headOutput.ContentLength != nil {
+		remoteSize = *headOutput.ContentLength
+	}
+	
+	if remoteSize != expectedSize {
+		return fmt.Errorf("size mismatch: local=%d, remote=%d", expectedSize, remoteSize)
+	}
+
+	// Calculate expected ETag for local file
+	expectedETag, err := calculateS3ETag(localFilePath, w.config.Upload.ChunkSizeMb)
+	if err != nil {
+		return fmt.Errorf("failed to calculate local file ETag: %w", err)
+	}
+
+	// Get remote ETag
+	var remoteETag string
+	if headOutput.ETag != nil {
+		remoteETag = aws.ToString(headOutput.ETag)
+		// Remove quotes if present
+		if len(remoteETag) > 1 && remoteETag[0] == '"' && remoteETag[len(remoteETag)-1] == '"' {
+			remoteETag = remoteETag[1 : len(remoteETag)-1]
+		}
+	}
+
+	// Compare ETags
+	if expectedETag != remoteETag {
+		return fmt.Errorf("ETag mismatch: local=%s, remote=%s", expectedETag, remoteETag)
+	}
+
+	w.logger.Debugw("Upload integrity verified",
+		"localFilePath", localFilePath,
+		"s3Key", s3Key,
+		"size", expectedSize,
+		"etag", expectedETag)
+
+	return nil
 }
