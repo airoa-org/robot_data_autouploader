@@ -46,11 +46,68 @@ Make sure to build on linux/amd64, and by using a OS with glibc (e.g., Ubuntu) t
 
 ## Configuration
 
-See `config.go` for the full list of configurations.
-The system is configured via a YAML file (e.g., `configs/config.yaml` or `testing/config-minio.yaml`). Key configuration areas include:
+The system is configured via a YAML file (e.g., `configs/config.yaml` or `testing/config-minio.yaml`). Below is a comprehensive list of all available configuration options:
 
--   **Daemon settings**: database path.
--   **Storage settings**: S3 credentials, bucket details, local staging directories, source patterns.
--   **USB settings**: Auto-mount options, ignored patterns, mount points.
--   **Job settings**: Upload behavior, retries.
--   **Copy settings**: Parallelism for copy operations.
+### Daemon Settings (`daemon`)
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `database_path` | string | `~/.autoloader/jobs.db` | Path to the SQLite database file for storing job information |
+| `disable_directory_scan` | bool | `false` | Disable automatic directory scanning for new data |
+
+### Storage Settings (`storage`)
+
+#### S3 Configuration (`storage.s3`)
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `bucket` | string | - | S3 bucket name for uploads |
+| `endpoint` | string | - | S3 endpoint URL (for custom S3-compatible services like MinIO) |
+| `region` | string | `us-west-1` | AWS region |
+| `access_key` | string | - | S3 access key ID |
+| `secret_key` | string | - | S3 secret access key |
+| `upload_path` | string | - | Prefix path for uploaded objects in S3 |
+
+#### Local Storage Configuration (`storage.local`)
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `staging_dir` | string | `~/.autoloader/staging` | Local directory for staging files before upload |
+| `retention_policy_on_upload` | string | - | Action after successful upload (`delete` to remove staged files) |
+| `retention_policy_on_copy` | string | - | Action after successful copy (`delete` to remove source files) |
+
+### USB Settings (`usb`)
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `target_mount_point` | string | `/storage` | Mount point to monitor for USB devices |
+| `target_directory` | string | - | Specific directory within USB devices to monitor |
+| `ignored_patterns` | []string | `["SYSTEM*", ".*"]` | File/directory patterns to ignore during USB scanning |
+| `scan_interval_ms` | int | `500` | Interval in milliseconds between USB scans |
+
+### Job Settings (`jobs`)
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `direct_upload` | bool | `false` | Skip staging and upload directly from source |
+| `max_retries` | int | `3` | Maximum number of retry attempts for failed jobs |
+
+### Copy Settings (`copy`)
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `exclude_patterns` | []string | `["*.tmp", "*.DS_Store"]` | File patterns to exclude during copy operations |
+| `min_free_space_ratio` | float64 | `0.05` | Minimum free space ratio to maintain (0.05 = 5%) |
+
+### Upload Settings (`upload`)
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `parallelism` | int | `1` | Number of concurrent upload threads |
+| `chunk_size_mb` | int | `8` | Chunk size in MB for multipart uploads |
+| `throttle_mbps` | int | `50` | Upload speed limit in Mbps (0 = no limit) |
+| `allowed_patterns` | []string | `["data.bag", "meta.json"]` | File patterns allowed for upload (empty = allow all) |
+
+### Example Configuration
+
+See `testing/config-minio.yaml` for a complete example configuration file that can be used with MinIO for testing purposes.
