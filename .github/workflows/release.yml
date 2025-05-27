@@ -6,6 +6,10 @@ on:
       - 'v*'
     branches:
       - main
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
   workflow_dispatch:
 
 permissions:
