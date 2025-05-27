@@ -4,17 +4,18 @@ This system is designed to automatically upload data, from a local source (e.g.,
 
 ## Running the System
 
+The daemon and client can be downloaded from the [releases page](https://github.com/airoa-org/robot_data_autouploader/releases). 
+
 ### Prerequisites
 
-- Go (Developed on 1.24.1)
-- Access to the configured S3 storage (if not using local/test setup)
+- Linux x86_64 system
 
 ### Running the Daemon
 
-The daemon is responsible for monitoring source directories or USB drives for new data and managing the upload queue.
+The daemon is responsible for monitoring source directories or USB drives for new data, staging it, and uploading it to the configured storage solution. 
 
 ```bash
-go run cmd/daemon/main.go --config <path_to_config_file>
+./robot-data-daemon-linux-x86_64 --config <path_to_config_file>
 # Example: go run cmd/daemon/main.go --config configs/config.yaml
 # For testing with MinIO: go run cmd/daemon/main.go --config testing/config-minio.yaml
 ```
@@ -24,8 +25,10 @@ go run cmd/daemon/main.go --config <path_to_config_file>
 The TUI client provides a user interface to view the status of ongoing and completed jobs.
 It must point to the same database as the daemon.
 
+When a upload job has failed, it can be retried from the TUI client.
+
 ```bash
-go run cmd/client/main.go --db <path_to_db_file>
+./robot-data-client-linux-x86_64 --db <path_to_db_file>
 ```
 
 #### Screenshots 
@@ -35,10 +38,15 @@ go run cmd/client/main.go --db <path_to_db_file>
 
 <img width="631" alt="Screenshot 2025-05-26 at 19 05 14" src="https://github.com/user-attachments/assets/32c78075-c8a6-4d20-8278-2f94b2c68c57" />
 
+## Development
 
-## Building
+### Prerequisites
+- Go 1.24 or later
+- SQLite3 (for the database)
 
-### On MacOS
+### Building
+
+#### On MacOS
 
 `docker run --rm --platform=linux/amd64 -v "$(pwd):/app" -w /app golang:1.24 sh -c "apt-get update && apt-get install -y libsqlite3-dev && CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o robot-data-daemon ./cmd/daemon/main.go"`
 
@@ -46,7 +54,7 @@ Make sure to build on linux/amd64, and by using a OS with glibc (e.g., Ubuntu) t
 
 ## Configuration
 
-The system is configured via a YAML file (e.g., `configs/config.yaml` or `testing/config-minio.yaml`). Below is a comprehensive list of all available configuration options:
+The system is configured via a YAML file (e.g., `testing/config-minio.yaml`). Below is a comprehensive list of all available configuration options:
 
 ### Daemon Settings (`daemon`)
 
