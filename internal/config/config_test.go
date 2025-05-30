@@ -73,8 +73,6 @@ storage:
     staging_dir: "/tmp/staging"
     retention_policy_on_upload: "delete"
     retention_policy_on_copy: "keep"
-    source_patterns:
-      - "/opt/data/*/rosbags"
 usb:
   target_mount_point: "/storage"
   target_directory: "data"
