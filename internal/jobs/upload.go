@@ -441,7 +441,7 @@ func (w *UploadWorker) uploadFile(job *Job, filePath, s3Key string) error {
 				if errDb := w.persister.SaveJob(job); errDb != nil {
 					w.logger.Warnw("Failed to save job state to DB after deduplication skip", "jobID", job.ID, "error", errDb)
 				}
-				return fmt.Errorf("file already exists in S3 with matching size and ETag, skipping upload: %s", finalS3Key)
+				return nil
 			} else {
 				w.logger.Warnw("File exists in S3 with matching size but different ETag, skipping upload",
 					"jobID", job.ID, "filePath", filePath, "s3Key", finalS3Key, "localETag", localETag, "remoteETag", remoteETag)
@@ -673,7 +673,7 @@ func (w *UploadWorker) verifyUploadIntegrity(localFilePath, s3Key string, expect
 		Bucket: aws.String(w.config.Storage.S3.Bucket),
 		Key:    aws.String(s3Key),
 	}
-	
+
 	headOutput, err := w.s3Client.HeadObject(w.ctx, headInput)
 	if err != nil {
 		return fmt.Errorf("failed to get remote object metadata: %w", err)
@@ -684,7 +684,7 @@ func (w *UploadWorker) verifyUploadIntegrity(localFilePath, s3Key string, expect
 	if headOutput.ContentLength != nil {
 		remoteSize = *headOutput.ContentLength
 	}
-	
+
 	if remoteSize != expectedSize {
 		return fmt.Errorf("size mismatch: local=%d, remote=%d", expectedSize, remoteSize)
 	}
