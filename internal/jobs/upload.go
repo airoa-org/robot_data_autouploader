@@ -194,6 +194,9 @@ func (w *UploadWorker) processJob(job *Job) {
 		return
 	}
 
+	// Create upload complete marker for the entire job at destination root
+	w.createUploadCompleteMarker(job)
+
 	// Update job status
 	job.UpdateStatus(JobStatusDone)
 	job.UpdateProgress(1.0)
@@ -553,32 +556,6 @@ func (w *UploadWorker) uploadFile(job *Job, filePath, s3Key string) error {
 
 	w.logger.Infow("S3 upload completed and verified successfully", "jobID", job.ID, "filePath", filePath, "s3Key", finalS3Key)
 
-	// Create a .upload_complete marker file in the same directory
-	markerKey := filepath.ToSlash(filepath.Dir(finalS3Key))
-	if markerKey != "" && markerKey != "." {
-		markerKey = markerKey + "/.upload_complete"
-	} else {
-		markerKey = ".upload_complete"
-	}
-
-	// Upload an empty file as the marker
-	_, err = w.s3Client.PutObject(w.ctx, &s3.PutObjectInput{
-		Bucket: aws.String(w.config.Storage.S3.Bucket),
-		Key:    aws.String(markerKey),
-		Body:   strings.NewReader(""),
-	})
-
-	if err != nil {
-		w.logger.Warnw("Failed to create upload_complete marker file",
-			"jobID", job.ID,
-			"s3Key", markerKey,
-			"error", err)
-		// Don't fail the job if marker creation fails, just log a warning
-	} else {
-		w.logger.Infow("Created upload_complete marker file",
-			"jobID", job.ID,
-			"s3Key", markerKey)
-	}
 
 	if job.FileCount <= 1 && job.TotalSize == fileInfo.Size() {
 		job.ProcessedSize = fileInfo.Size()
@@ -717,4 +694,40 @@ func (w *UploadWorker) verifyUploadIntegrity(localFilePath, s3Key string, expect
 		"etag", expectedETag)
 
 	return nil
+}
+
+// createUploadCompleteMarker creates an upload complete marker file at the job destination root
+func (w *UploadWorker) createUploadCompleteMarker(job *Job) {
+	// Create upload complete marker for the entire job at destination root
+	uploadPath := w.config.Storage.S3.UploadPath
+	markerS3Key := filepath.ToSlash(job.Destination) + "/.upload_complete"
+	if uploadPath != "" {
+		uploadPath = filepath.ToSlash(uploadPath)
+		if len(uploadPath) > 0 && uploadPath[len(uploadPath)-1] == '/' {
+			uploadPath = uploadPath[:len(uploadPath)-1]
+		}
+		markerS3Key = uploadPath + "/" + markerS3Key
+		if len(markerS3Key) > 0 && markerS3Key[0] == '/' {
+			markerS3Key = markerS3Key[1:]
+		}
+	}
+
+	// Upload an empty file as the marker
+	_, markerErr := w.s3Client.PutObject(w.ctx, &s3.PutObjectInput{
+		Bucket: aws.String(w.config.Storage.S3.Bucket),
+		Key:    aws.String(markerS3Key),
+		Body:   strings.NewReader(""),
+	})
+
+	if markerErr != nil {
+		w.logger.Warnw("Failed to create upload_complete marker file for job",
+			"jobID", job.ID,
+			"s3Key", markerS3Key,
+			"error", markerErr)
+		// Don't fail the job if marker creation fails, just log a warning
+	} else {
+		w.logger.Infow("Created upload_complete marker file for job",
+			"jobID", job.ID,
+			"s3Key", markerS3Key)
+	}
 }
