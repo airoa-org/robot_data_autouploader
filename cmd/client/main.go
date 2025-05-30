@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -157,6 +158,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.jobs = jobs
 				rows := jobsToRows(jobs)
 				m.table.SetRows(rows)
+			}
+			return m, tick()
+		} else if m.state == stateJobDetail && m.selectedJob != nil {
+			// Re-fetch the selected job to update its data
+			jobs, err := m.db.GetAllJobs()
+			if err == nil {
+				for _, job := range jobs {
+					if job.ID == m.selectedJob.ID {
+						m.selectedJob = job
+						// Update viewport content with fresh data
+						if m.viewportReady {
+							m.viewport.SetContent(m.formatJobDetailsWrapped(job, m.width))
+						}
+						break
+					}
+				}
 			}
 			return m, tick()
 		}
@@ -388,8 +405,14 @@ func (m model) formatJobDetailsWrapped(job *jobs.Job, width int) string {
 
 	if len(job.Metadata) > 0 {
 		details.WriteString("\nMetadata:\n")
-		for key, value := range job.Metadata {
-			details.WriteString(wrapText(fmt.Sprintf("  %s: %s", key, value), contentWidth) + "\n")
+		// Sort metadata keys alphabetically
+		keys := make([]string, 0, len(job.Metadata))
+		for key := range job.Metadata {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			details.WriteString(wrapText(fmt.Sprintf("  %s: %s", key, job.Metadata[key]), contentWidth) + "\n")
 		}
 	}
 
