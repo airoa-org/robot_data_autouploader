@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/dustin/go-humanize"
 	"go.uber.org/zap"
 )
 
@@ -387,16 +388,16 @@ func (m model) formatJobDetailsWrapped(job *jobs.Job, width int) string {
 	}
 
 	details.WriteString(wrapText(fmt.Sprintf("Job ID: %s", job.ID), contentWidth) + "\n")
-	details.WriteString(wrapText(fmt.Sprintf("Created: %s", job.CreatedAt.Format(time.RFC3339)), contentWidth) + "\n")
-	details.WriteString(wrapText(fmt.Sprintf("Updated: %s", job.UpdatedAt.Format(time.RFC3339)), contentWidth) + "\n")
+	details.WriteString(wrapText(fmt.Sprintf("Created: %s (%s)", humanize.Time(job.CreatedAt), job.CreatedAt.Format(time.RFC3339)), contentWidth) + "\n")
+	details.WriteString(wrapText(fmt.Sprintf("Updated: %s (%s)", humanize.Time(job.UpdatedAt), job.UpdatedAt.Format(time.RFC3339)), contentWidth) + "\n")
 	details.WriteString(wrapText(fmt.Sprintf("Type: %s", job.Type), contentWidth) + "\n")
 	details.WriteString(wrapText(fmt.Sprintf("Status: %s", job.Status), contentWidth) + "\n")
 	details.WriteString(wrapText(fmt.Sprintf("Progress: %.1f%%", job.Progress*100), contentWidth) + "\n")
 	details.WriteString(wrapText(fmt.Sprintf("Source: %s", job.Source), contentWidth) + "\n")
 	details.WriteString(wrapText(fmt.Sprintf("Destination: %s", job.Destination), contentWidth) + "\n")
 	details.WriteString(wrapText(fmt.Sprintf("File Count: %d", job.FileCount), contentWidth) + "\n")
-	details.WriteString(wrapText(fmt.Sprintf("Total Size: %d bytes", job.TotalSize), contentWidth) + "\n")
-	details.WriteString(wrapText(fmt.Sprintf("Processed Size: %d bytes", job.ProcessedSize), contentWidth) + "\n")
+	details.WriteString(wrapText(fmt.Sprintf("Total Size: %s (%d bytes)", humanize.Bytes(uint64(job.TotalSize)), job.TotalSize), contentWidth) + "\n")
+	details.WriteString(wrapText(fmt.Sprintf("Processed Size: %s (%d bytes)", humanize.Bytes(uint64(job.ProcessedSize)), job.ProcessedSize), contentWidth) + "\n")
 
 	if job.ErrorMsg.Valid && job.ErrorMsg.String != "" {
 		details.WriteString("\n")
