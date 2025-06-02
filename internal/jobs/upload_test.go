@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"os"
 	"testing"
 
 	appconfig "github.com/airoa-org/robot_data_pipeline/autoloader/internal/config"
@@ -152,6 +153,54 @@ func TestIsFileAllowedWithComplexPatterns(t *testing.T) {
 			result := worker.isFileAllowed(tc.filePath)
 			if result != tc.expected {
 				t.Errorf("isFileAllowed(%q) = %v, want %v", tc.filePath, result, tc.expected)
+			}
+		})
+	}
+}
+
+func TestCalculateS3ETag(t *testing.T) {
+	tests := []struct {
+		name        string
+		fileContent []byte
+		chunkSizeMb int
+		expected    string
+	}{
+		{
+			name:        "empty file",
+			fileContent: []byte{},
+			chunkSizeMb: 5,
+			expected:    "d41d8cd98f00b204e9800998ecf8427e", // MD5 of empty content
+		},
+		{
+			name:        "small file single part",
+			fileContent: []byte("hello world"),
+			chunkSizeMb: 5,
+			expected:    "5eb63bbbe01eeed093cb22bb8f5acdc3", // MD5 of "hello world"
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a temporary file with the test content
+			tmpFile, err := os.CreateTemp("", "test_etag_*")
+			if err != nil {
+				t.Fatalf("Failed to create temp file: %v", err)
+			}
+			defer os.Remove(tmpFile.Name())
+
+			if _, err := tmpFile.Write(tt.fileContent); err != nil {
+				t.Fatalf("Failed to write test content: %v", err)
+			}
+			tmpFile.Close()
+
+			// Calculate ETag
+			etag, err := calculateS3ETag(tmpFile.Name(), tt.chunkSizeMb)
+			if err != nil {
+				t.Fatalf("calculateS3ETag failed: %v", err)
+			}
+
+			if etag != tt.expected {
+				t.Errorf("calculateS3ETag() = %q, want %q", etag, tt.expected)
 			}
 		})
 	}

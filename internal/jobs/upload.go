@@ -340,6 +340,14 @@ func calculateS3ETag(filePath string, chunkSizeMb int) (string, error) {
 			return "", err
 		}
 	}
+	
+	// Handle 0-size files
+	if len(md5s) == 0 {
+		// For 0-size files, S3 returns the MD5 of empty content without part count suffix
+		h := md5.New()
+		return fmt.Sprintf("%x", h.Sum(nil)), nil
+	}
+	
 	if len(md5s) == 1 {
 		return fmt.Sprintf("%x", md5s[0]), nil
 	}
