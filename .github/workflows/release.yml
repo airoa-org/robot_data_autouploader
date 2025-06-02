@@ -50,6 +50,7 @@ jobs:
           robot-data-daemon-linux-x86_64
           robot-data-client-linux-x86_64
         generate_release_notes: true
+        make_latest: true
     
     - name: Create Release for Commit
       uses: softprops/action-gh-release@v2.2.2
