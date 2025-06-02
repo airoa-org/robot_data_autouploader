@@ -52,6 +52,17 @@ jobs:
         generate_release_notes: true
         make_latest: true
     
+    - name: Update latest tag
+      if: startsWith(github.ref, 'refs/tags/')
+      run: |
+        # Delete existing latest tag and push deletion
+        git tag -d latest || true
+        git push origin :refs/tags/latest || true
+        
+        # Create new latest tag pointing to current commit
+        git tag latest
+        git push origin latest
+    
     - name: Create Release for Commit
       uses: softprops/action-gh-release@v2.2.2
       if: github.ref == 'refs/heads/main'
