@@ -212,17 +212,44 @@ func (w *CopyWorker) processJob(job *Job) {
 		w.logger.Infow("Attempting to delete original data from USB source after successful copy",
 			"jobID", job.ID,
 			"usb_source_path", job.Source)
-		if delErr := os.RemoveAll(job.Source); delErr != nil {
-			w.logger.Errorw("Failed to delete original data from USB source after copy. The data remains on the USB device.",
+		
+		result, err := RemoveAllBestEffort(job.Source, w.logger)
+		if err != nil {
+			w.logger.Errorw("Error during deletion attempt",
 				"jobID", job.ID,
 				"usb_source_path", job.Source,
-				"error", delErr)
-			// This failure does not roll back the copy. The data is safe in staging.
-			// The USB device status should reflect that copy succeeded but source deletion failed.
-		} else {
-			w.logger.Infow("Successfully deleted original data from USB source after copy",
+				"error", err)
+		}
+		
+		// Determine overall success/failure
+		if result.TotalFiles == result.DeletedFiles && result.TotalDirs == result.DeletedDirs {
+			w.logger.Infow("Successfully deleted all original data from USB source after copy",
 				"jobID", job.ID,
-				"usb_source_path", job.Source)
+				"usb_source_path", job.Source,
+				"deletedFiles", result.DeletedFiles,
+				"deletedDirs", result.DeletedDirs)
+		} else {
+			w.logger.Warnw("Partial deletion of original data from USB source. Some files/directories remain on the USB device.",
+				"jobID", job.ID,
+				"usb_source_path", job.Source,
+				"deletedFiles", result.DeletedFiles,
+				"totalFiles", result.TotalFiles,
+				"deletedDirs", result.DeletedDirs,
+				"totalDirs", result.TotalDirs,
+				"failedFiles", len(result.FailedFiles),
+				"failedDirs", len(result.FailedDirs))
+			
+			// Log details about what couldn't be deleted
+			if len(result.FailedFiles) > 0 {
+				w.logger.Debugw("Files that could not be deleted from USB",
+					"jobID", job.ID,
+					"files", result.FailedFiles)
+			}
+			if len(result.FailedDirs) > 0 {
+				w.logger.Debugw("Directories that could not be deleted from USB",
+					"jobID", job.ID,
+					"directories", result.FailedDirs)
+			}
 		}
 	}
 

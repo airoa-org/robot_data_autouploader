@@ -211,13 +211,47 @@ func (w *UploadWorker) processJob(job *Job) {
 	if w.config.Storage.Local.RetentionPolicyOnUpload == "delete" {
 		// Only delete if not the source directory
 		if filepath.Dir(job.Source) != job.Source {
-			err = os.RemoveAll(job.Source)
+			w.logger.Infow("Attempting to delete staging data after successful upload",
+				"jobID", job.ID,
+				"staging_path", job.Source)
+			
+			result, err := RemoveAllBestEffort(job.Source, w.logger)
 			if err != nil {
-				w.logger.Warnw("Failed to delete source directory",
+				w.logger.Errorw("Error during staging deletion attempt",
 					"jobID", job.ID,
-					"source", job.Source,
+					"staging_path", job.Source,
 					"error", err)
-				// Don't fail the job for this
+			}
+			
+			// Determine overall success/failure for staging deletion
+			if result.TotalFiles == result.DeletedFiles && result.TotalDirs == result.DeletedDirs {
+				w.logger.Infow("Successfully deleted all staging data after upload",
+					"jobID", job.ID,
+					"staging_path", job.Source,
+					"deletedFiles", result.DeletedFiles,
+					"deletedDirs", result.DeletedDirs)
+			} else {
+				w.logger.Warnw("Partial deletion of staging data. Some files/directories remain in staging.",
+					"jobID", job.ID,
+					"staging_path", job.Source,
+					"deletedFiles", result.DeletedFiles,
+					"totalFiles", result.TotalFiles,
+					"deletedDirs", result.DeletedDirs,
+					"totalDirs", result.TotalDirs,
+					"failedFiles", len(result.FailedFiles),
+					"failedDirs", len(result.FailedDirs))
+				
+				// Log details about what couldn't be deleted
+				if len(result.FailedFiles) > 0 {
+					w.logger.Debugw("Files that could not be deleted from staging",
+						"jobID", job.ID,
+						"files", result.FailedFiles)
+				}
+				if len(result.FailedDirs) > 0 {
+					w.logger.Debugw("Directories that could not be deleted from staging",
+						"jobID", job.ID,
+						"directories", result.FailedDirs)
+				}
 			}
 		}
 	}
