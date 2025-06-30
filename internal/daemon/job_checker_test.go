@@ -1,10 +1,12 @@
 package daemon
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/jobs"
+	"golang.org/x/sync/errgroup"
 )
 
 func TestCheckForNewJobs(t *testing.T) {
@@ -68,6 +70,31 @@ func TestCheckForNewJobs(t *testing.T) {
 	}
 }
 
+func (s *Service) startJobCheckerForTest(eg *errgroup.Group, testCtx context.Context, interval time.Duration) {
+	s.logger.Info("Starting periodic job checker for test")
+
+	// Start job checker in a goroutine
+	eg.Go(func() error {
+		defer s.logger.Info("Job checker stopped")
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-testCtx.Done(): // Listen on the passed test context
+				s.logger.Info("Job checker context cancelled, stopping")
+				return testCtx.Err()
+			case <-ticker.C:
+				if err := s.checkForNewJobs(); err != nil {
+					s.logger.Warnw("Failed to check for new jobs", "error", err)
+				}
+			}
+		}
+	})
+
+	s.logger.Info("Job checker started")
+}
+
 func TestPeriodicJobChecker(t *testing.T) {
 	// Create test database
 	db, _ := createTestDB(t)
@@ -78,8 +105,12 @@ func TestPeriodicJobChecker(t *testing.T) {
 	defer service.copyQueue.Close()
 	defer service.uploadQueue.Close()
 
-	// Start the periodic job checker
-	service.startJobChecker()
+	// Create a cancellable context for the test and an errgroup tied to it
+	testCtx, testCancel := context.WithCancel(context.Background())
+	eg, _ := errgroup.WithContext(testCtx)
+
+	// Start the periodic job checker with the errgroup and its context
+	service.startJobCheckerForTest(eg, testCtx, 50*time.Millisecond)
 
 	// Create a job in the database after the checker has started
 	uploadJob := jobs.NewJob(jobs.JobTypeUpload, "/test/source", "/test/destination")
@@ -87,11 +118,10 @@ func TestPeriodicJobChecker(t *testing.T) {
 		t.Fatalf("Failed to save upload job: %v", err)
 	}
 
-	// Wait for the job checker to pick up the job (it runs every 5 seconds)
-	// We'll check multiple times with longer intervals
+	// Wait for the job checker to pick up the job
 	found := false
-	for i := 0; i < 60; i++ { // Wait up to 6 seconds
-		time.Sleep(100 * time.Millisecond)
+	for i := 0; i < 40; i++ { // Wait up to 2 seconds
+		time.Sleep(50 * time.Millisecond)
 		if service.uploadQueue.Size() > 0 {
 			found = true
 			break
@@ -102,9 +132,12 @@ func TestPeriodicJobChecker(t *testing.T) {
 		t.Errorf("Expected job to be picked up by periodic checker, but upload queue is still empty")
 	}
 
-	// Stop the service to clean up the goroutine
-	service.cancelFunc()
-	service.wg.Wait()
+	// Stop the test context to clean up the goroutine
+	testCancel()
+	err := eg.Wait()
+	if err != nil && err != context.Canceled {
+		t.Errorf("Expected errgroup to exit cleanly, but got: %v", err)
+	}
 }
 
 func TestCheckForNewJobs_OnlyQueued(t *testing.T) {

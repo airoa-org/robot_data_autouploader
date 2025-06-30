@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -46,20 +47,17 @@ func main() {
 
 	// Start daemon service
 	go func() {
-		if err := service.Start(); err != nil {
-			sugar.Errorw("Failed to start daemon service", "error", err)
-			os.Exit(1)
-		}
+		<-sigCh
+		sugar.Info("Received signal, stopping daemon service...")
+		service.Stop()
 	}()
 
 	sugar.Info("Daemon service started. Press Ctrl+C to stop.")
 
-	// Wait for signal
-	<-sigCh
-	sugar.Info("Received signal, stopping daemon service...")
-
-	// Stop daemon service
-	service.Stop()
+	if err := service.Start(); err != nil && err != context.Canceled {
+		sugar.Errorw("Failed to start daemon service", "error", err)
+		os.Exit(1)
+	}
 
 	sugar.Info("Daemon service stopped.")
 }

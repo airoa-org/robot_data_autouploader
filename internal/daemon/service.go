@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	appconfig "github.com/airoa-org/robot_data_pipeline/autoloader/internal/config"
@@ -13,6 +12,7 @@ import (
 	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/jobs"
 	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/storage"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 // Service represents the daemon service
@@ -28,7 +28,6 @@ type Service struct {
 
 	ctx        context.Context
 	cancelFunc context.CancelFunc
-	wg         sync.WaitGroup
 }
 
 // NewService creates a new daemon service
@@ -95,19 +94,21 @@ func (s *Service) Start() error {
 	// Start workers
 	s.startWorkers()
 
+	eg, _ := errgroup.WithContext(s.ctx)
+
 	// Start USB monitor (only if directory scanning is not disabled)
 	if !s.config.Daemon.DisableDirectoryScan {
-		s.startUSBMonitor()
+		s.startUSBMonitor(eg)
 	} else {
 		s.logger.Info("Directory scanning disabled, skipping USB monitor startup")
 	}
 
 	// Start periodic job checker
-	s.startJobChecker()
+	s.startJobChecker(eg)
 
 	s.logger.Info("Daemon service started")
 
-	return nil
+	return eg.Wait()
 }
 
 // Stop stops the daemon service
@@ -144,9 +145,6 @@ func (s *Service) Stop() {
 	if s.db != nil {
 		s.db.Close()
 	}
-
-	// Wait for all goroutines to finish
-	s.wg.Wait()
 
 	s.logger.Info("Daemon service stopped")
 }
@@ -312,22 +310,15 @@ func (s *Service) initUSBMonitor() error {
 }
 
 // startUSBMonitor starts the USB monitor
-func (s *Service) startUSBMonitor() {
+func (s *Service) startUSBMonitor(eg *errgroup.Group) {
 	s.logger.Info("Starting USB monitor")
 
 	// Start USB monitor
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
+	eg.Go(func() error {
 		s.usbMonitor.Start(s.ctx)
-	}()
-
-	s.logger.Info("USB monitor started")
-}
-
-// WaitForShutdown waits for the service to shut down
-func (s *Service) WaitForShutdown() {
-	s.wg.Wait()
+		s.logger.Info("USB monitor started")
+		return nil
+	})
 }
 
 // cleanupInterruptedJobs finds any jobs in in_progress, paused, or queued states
@@ -385,30 +376,27 @@ func (s *Service) cleanupInterruptedJobs() error {
 
 // startJobChecker starts a goroutine that periodically checks for new jobs in the database
 // and adds them to the appropriate queue
-func (s *Service) startJobChecker() {
+func (s *Service) startJobChecker(eg *errgroup.Group) {
 	s.logger.Info("Starting periodic job checker")
 
 	// Start job checker in a goroutine
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-
-		// Check for new jobs every 5 seconds
+	eg.Go(func() error {
+		defer s.logger.Info("Job checker stopped")
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 
 		for {
 			select {
 			case <-s.ctx.Done():
-				s.logger.Info("Job checker stopped")
-				return
+				s.logger.Info("Job checker context cancelled, stopping")
+				return s.ctx.Err()
 			case <-ticker.C:
 				if err := s.checkForNewJobs(); err != nil {
 					s.logger.Warnw("Failed to check for new jobs", "error", err)
 				}
 			}
 		}
-	}()
+	})
 
 	s.logger.Info("Job checker started")
 }

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	appconfig "github.com/airoa-org/robot_data_pipeline/autoloader/internal/config"
 	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/jobs"
 	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/storage"
 	"go.uber.org/zap"
@@ -52,6 +53,11 @@ func createTestService(t *testing.T, db *storage.DB) *Service {
 
 	// Create service with minimal setup
 	service := &Service{
+		config:     &appconfig.Config{ // Add a default config
+			Jobs: appconfig.JobsConfig{
+				MaxRetries: 3,
+			},
+		},
 		db:         db,
 		logger:     sugar,
 		ctx:        ctx,
