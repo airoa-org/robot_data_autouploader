@@ -109,17 +109,6 @@ func (d *DB) Migrate() error {
 		return fmt.Errorf("failed to create job_metadata table: %w", err)
 	}
 
-	// Create config table
-	_, err = d.db.Exec(`
-		CREATE TABLE IF NOT EXISTS config (
-			key TEXT PRIMARY KEY,
-			value TEXT NOT NULL
-		)
-	`)
-	if err != nil {
-		return fmt.Errorf("failed to create config table: %w", err)
-	}
-
 	d.logger.Info("Database schema migrated")
 
 	return nil
@@ -363,9 +352,9 @@ func (d *DB) HasSuccessfullyCopiedJobToDestination(sourcePath, destPath string) 
 		if err == sql.ErrNoRows {
 			return false, nil
 		}
-		d.logger.Errorw("Failed to query for successfully copied job to destination", 
+		d.logger.Errorw("Failed to query for successfully copied job to destination",
 			"sourcePath", sourcePath, "destPath", destPath, "error", err)
-		return false, fmt.Errorf("failed to query jobs table for source '%s' and destination '%s': %w", 
+		return false, fmt.Errorf("failed to query jobs table for source '%s' and destination '%s': %w",
 			sourcePath, destPath, err)
 	}
 	return count > 0, nil
