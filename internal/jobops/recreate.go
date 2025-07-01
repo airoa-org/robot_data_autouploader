@@ -21,11 +21,22 @@ type JobSaver interface {
 type JobStorage interface {
 	JobGetter
 	JobSaver
+	ResetJobFiles(jobID string) error
+}
+
+// RecreateUploadJobOptions holds options for job recreation
+type RecreateUploadJobOptions struct {
+	ResetFileTracking bool // If true, clear all file tracking data; if false, preserve existing progress
 }
 
 // RecreateUploadJob recreates an upload job from an original job ID
 // This is a shared function that can be used by both client and daemon
 func RecreateUploadJob(storage JobStorage, originalJobID string) (*jobs.Job, error) {
+	return RecreateUploadJobWithOptions(storage, originalJobID, RecreateUploadJobOptions{ResetFileTracking: true})
+}
+
+// RecreateUploadJobWithOptions recreates an upload job with specific options
+func RecreateUploadJobWithOptions(storage JobStorage, originalJobID string, options RecreateUploadJobOptions) (*jobs.Job, error) {
 	// Get the original job
 	originalJob, err := storage.GetJob(originalJobID)
 	if err != nil {
@@ -56,6 +67,20 @@ func RecreateUploadJob(storage JobStorage, originalJobID string) (*jobs.Job, err
 	// Save the new job to the database
 	if err := storage.SaveJob(newJob); err != nil {
 		return nil, fmt.Errorf("failed to save recreated job: %w", err)
+	}
+
+	// Handle file tracking based on options
+	if options.ResetFileTracking {
+		// Reset file tracking for the new job to start fresh
+		if err := storage.ResetJobFiles(newJob.ID); err != nil {
+			// Don't fail the recreation if file tracking reset fails, just log
+			// The job will work without file tracking
+			return newJob, nil
+		}
+		newJob.AddMetadata("file_tracking_reset", "true")
+	} else {
+		// Preserve existing file tracking data by not resetting it
+		newJob.AddMetadata("file_tracking_preserved", "true")
 	}
 
 	return newJob, nil

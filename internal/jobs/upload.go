@@ -260,7 +260,11 @@ func (w *UploadWorker) processJob(job *Job) {
 // uploadDirectory uploads all files in a directory
 func (w *UploadWorker) uploadDirectory(job *Job) error {
 	// Get list of files to upload
-	var filesToUpload []string
+	type fileInfo struct {
+		path string
+		size int64
+	}
+	var filesToUpload []fileInfo
 	err := filepath.Walk(job.Source, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -282,7 +286,7 @@ func (w *UploadWorker) uploadDirectory(job *Job) error {
 			}
 		}
 
-		filesToUpload = append(filesToUpload, path)
+		filesToUpload = append(filesToUpload, fileInfo{path: path, size: info.Size()})
 		return nil
 	})
 
@@ -294,11 +298,7 @@ func (w *UploadWorker) uploadDirectory(job *Job) error {
 	job.FileCount = len(filesToUpload)
 	var totalSize int64
 	for _, file := range filesToUpload {
-		info, err := os.Stat(file)
-		if err != nil {
-			return fmt.Errorf("error getting file info for size calculation: %w", err)
-		}
-		totalSize += info.Size()
+		totalSize += file.size
 	}
 	job.TotalSize = totalSize
 	job.ProcessedSize = 0                                // Reset processed size
@@ -307,10 +307,68 @@ func (w *UploadWorker) uploadDirectory(job *Job) error {
 		// Log error but continue
 	}
 
+	// Check for already completed files
+	completedFiles, err := w.persister.GetCompletedFiles(job.ID)
+	if err != nil {
+		w.logger.Warnw("Failed to get completed files, will process all files", "jobID", job.ID, "error", err)
+	} else if len(completedFiles) > 0 {
+		w.logger.Infow("Found completed files from previous run", "jobID", job.ID, "count", len(completedFiles))
+		
+		// Create a map of completed files for fast lookup
+		completedMap := make(map[string]bool)
+		var completedSize int64
+		for _, cf := range completedFiles {
+			completedMap[cf.FilePath] = true
+			completedSize += cf.Size
+		}
+		
+		// Update processed size to reflect already completed files
+		job.ProcessedSize = completedSize
+		if job.TotalSize > 0 {
+			job.UpdateProgress(float64(job.ProcessedSize) / float64(job.TotalSize))
+		}
+		if errDb := w.persister.SaveJob(job); errDb != nil {
+			w.logger.Warnw("Failed to update job progress after checking completed files", "jobID", job.ID, "error", errDb)
+		}
+		
+		// Filter out already completed files
+		var pendingFiles []fileInfo
+		for _, file := range filesToUpload {
+			if !completedMap[file.path] {
+				pendingFiles = append(pendingFiles, file)
+			} else {
+				w.logger.Debugw("Skipping already uploaded file", "file", file.path)
+			}
+		}
+		filesToUpload = pendingFiles
+		
+		if len(filesToUpload) == 0 {
+			w.logger.Infow("All files already uploaded", "jobID", job.ID)
+			return nil
+		}
+	}
+	
+	// Initialize file tracking for pending files
+	var jobFiles []*JobFile
+	for _, file := range filesToUpload {
+		relPath, _ := filepath.Rel(job.Source, file.path)
+		jobFiles = append(jobFiles, &JobFile{
+			JobID:        job.ID,
+			FilePath:     file.path,
+			RelativePath: relPath,
+			Size:         file.size,
+			Status:       "pending",
+		})
+	}
+	
+	if err := w.persister.SaveJobFiles(jobFiles); err != nil {
+		w.logger.Warnw("Failed to initialize file tracking, continuing anyway", "jobID", job.ID, "error", err)
+	}
+
 	// Upload each file
-	for _, filePath := range filesToUpload {
+	for _, file := range filesToUpload {
 		// Calculate relative path
-		relPath, err := filepath.Rel(job.Source, filePath)
+		relPath, err := filepath.Rel(job.Source, file.path)
 		if err != nil {
 			return fmt.Errorf("error calculating relative path: %w", err)
 		}
@@ -319,20 +377,40 @@ func (w *UploadWorker) uploadDirectory(job *Job) error {
 		destKey := filepath.Join(job.Destination, relPath)
 		destKey = filepath.ToSlash(destKey) // Convert to forward slashes for S3
 
-		// Get file size
-		info, err := os.Stat(filePath)
+		// Upload the file
+		err = w.uploadFile(job, file.path, destKey)
+		
+		// Update file tracking status
+		now := time.Now()
+		jobFile := &JobFile{
+			JobID:        job.ID,
+			FilePath:     file.path,
+			RelativePath: relPath,
+			Size:         file.size,
+		}
+		
 		if err != nil {
-			return fmt.Errorf("error getting file info: %w", err)
+			jobFile.Status = "failed"
+			jobFile.ErrorMessage = err.Error()
+		} else {
+			jobFile.Status = "completed"
+			jobFile.CompletedAt = &now
+		}
+		
+		if trackErr := w.persister.SaveJobFile(jobFile); trackErr != nil {
+			w.logger.Warnw("Failed to update file tracking status", 
+				"jobID", job.ID, 
+				"file", file.path, 
+				"status", jobFile.Status,
+				"error", trackErr)
 		}
 
-		// Upload the file
-		err = w.uploadFile(job, filePath, destKey)
 		if err != nil {
-			return fmt.Errorf("error uploading file %s: %w", filePath, err)
+			return fmt.Errorf("error uploading file %s: %w", file.path, err)
 		}
 
 		// Update progress
-		job.ProcessedSize += info.Size()
+		job.ProcessedSize += file.size
 		job.UpdateProgress(float64(job.ProcessedSize) / float64(job.TotalSize))
 		if errDb := w.persister.SaveJob(job); errDb != nil { // Use persister
 			w.logger.Warnw("Failed to save job progress to DB during directory upload", "jobID", job.ID, "error", errDb)

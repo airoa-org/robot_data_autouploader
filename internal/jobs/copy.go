@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	appconfig "github.com/airoa-org/robot_data_pipeline/autoloader/internal/config"
 	"go.uber.org/zap"
@@ -264,7 +265,11 @@ func (w *CopyWorker) processJob(job *Job) {
 // copyDirectory copies a directory recursively
 func (w *CopyWorker) copyDirectory(job *Job) error {
 	// Get list of files to copy
-	var filesToCopy []string
+	type fileInfo struct {
+		path string
+		size int64
+	}
+	var filesToCopy []fileInfo
 	err := filepath.Walk(job.Source, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -287,7 +292,7 @@ func (w *CopyWorker) copyDirectory(job *Job) error {
 			}
 		}
 
-		filesToCopy = append(filesToCopy, path)
+		filesToCopy = append(filesToCopy, fileInfo{path: path, size: info.Size()})
 		return nil
 	})
 
@@ -299,11 +304,7 @@ func (w *CopyWorker) copyDirectory(job *Job) error {
 	job.FileCount = len(filesToCopy)
 	var totalSize int64
 	for _, file := range filesToCopy {
-		info, err := os.Stat(file)
-		if err != nil {
-			return fmt.Errorf("error getting file info for size calculation: %w", err)
-		}
-		totalSize += info.Size()
+		totalSize += file.size
 	}
 	job.TotalSize = totalSize
 	job.ProcessedSize = 0                                // Reset processed size
@@ -312,9 +313,67 @@ func (w *CopyWorker) copyDirectory(job *Job) error {
 		// Log error but continue
 	}
 
-	// Create destination directory structure
-	for _, srcPath := range filesToCopy {
-		relPath, err := filepath.Rel(job.Source, srcPath)
+	// Check for already completed files
+	completedFiles, err := w.persister.GetCompletedFiles(job.ID)
+	if err != nil {
+		w.logger.Warnw("Failed to get completed files, will process all files", "jobID", job.ID, "error", err)
+	} else if len(completedFiles) > 0 {
+		w.logger.Infow("Found completed files from previous run", "jobID", job.ID, "count", len(completedFiles))
+		
+		// Create a map of completed files for fast lookup
+		completedMap := make(map[string]bool)
+		var completedSize int64
+		for _, cf := range completedFiles {
+			completedMap[cf.FilePath] = true
+			completedSize += cf.Size
+		}
+		
+		// Update processed size to reflect already completed files
+		job.ProcessedSize = completedSize
+		if job.TotalSize > 0 {
+			job.UpdateProgress(float64(job.ProcessedSize) / float64(job.TotalSize))
+		}
+		if errDb := w.persister.SaveJob(job); errDb != nil {
+			w.logger.Warnw("Failed to update job progress after checking completed files", "jobID", job.ID, "error", errDb)
+		}
+		
+		// Filter out already completed files
+		var pendingFiles []fileInfo
+		for _, file := range filesToCopy {
+			if !completedMap[file.path] {
+				pendingFiles = append(pendingFiles, file)
+			} else {
+				w.logger.Debugw("Skipping already completed file", "file", file.path)
+			}
+		}
+		filesToCopy = pendingFiles
+		
+		if len(filesToCopy) == 0 {
+			w.logger.Infow("All files already completed", "jobID", job.ID)
+			return nil
+		}
+	}
+	
+	// Initialize file tracking for pending files
+	var jobFiles []*JobFile
+	for _, file := range filesToCopy {
+		relPath, _ := filepath.Rel(job.Source, file.path)
+		jobFiles = append(jobFiles, &JobFile{
+			JobID:        job.ID,
+			FilePath:     file.path,
+			RelativePath: relPath,
+			Size:         file.size,
+			Status:       "pending",
+		})
+	}
+	
+	if err := w.persister.SaveJobFiles(jobFiles); err != nil {
+		w.logger.Warnw("Failed to initialize file tracking, continuing anyway", "jobID", job.ID, "error", err)
+	}
+
+	// Create destination directory structure and copy files
+	for _, file := range filesToCopy {
+		relPath, err := filepath.Rel(job.Source, file.path)
 		if err != nil {
 			return fmt.Errorf("failed to get relative path: %w", err)
 		}
@@ -324,9 +383,38 @@ func (w *CopyWorker) copyDirectory(job *Job) error {
 			return fmt.Errorf("failed to create destination subdirectory: %w", err)
 		}
 
-		if err := w.copySingleFileWithProgress(job, srcPath, destPath); err != nil {
-			return fmt.Errorf("failed to copy file %s: %w", srcPath, err)
+		// Copy the file
+		err = w.copySingleFileWithProgress(job, file.path, destPath)
+		
+		// Update file tracking status
+		now := time.Now()
+		jobFile := &JobFile{
+			JobID:        job.ID,
+			FilePath:     file.path,
+			RelativePath: relPath,
+			Size:         file.size,
 		}
+		
+		if err != nil {
+			jobFile.Status = "failed"
+			jobFile.ErrorMessage = err.Error()
+		} else {
+			jobFile.Status = "completed"
+			jobFile.CompletedAt = &now
+		}
+		
+		if trackErr := w.persister.SaveJobFile(jobFile); trackErr != nil {
+			w.logger.Warnw("Failed to update file tracking status", 
+				"jobID", job.ID, 
+				"file", file.path, 
+				"status", jobFile.Status,
+				"error", trackErr)
+		}
+		
+		if err != nil {
+			return fmt.Errorf("failed to copy file %s: %w", file.path, err)
+		}
+		
 		// ProcessedSize is updated within copySingleFileWithProgress and then aggregated
 		// Update overall job progress after each file
 		if job.TotalSize > 0 { // Avoid division by zero if directory was empty

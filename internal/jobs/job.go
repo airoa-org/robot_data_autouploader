@@ -116,7 +116,22 @@ func (j *Job) AddMetadata(key, value string) {
 // This helps to break import cycles between jobs and storage packages.
 type JobPersister interface {
 	SaveJob(job *Job) error
+	SaveJobFiles(jobFiles []*JobFile) error
+	GetCompletedFiles(jobID string) ([]*JobFile, error)
+	SaveJobFile(jobFile *JobFile) error
 	// GetJob(id string) (*Job, error) // Example: if workers needed to fetch/reload jobs
+}
+
+// JobFile represents a file being tracked within a job
+type JobFile struct {
+	JobID        string
+	FilePath     string
+	RelativePath string
+	Size         int64
+	Status       string
+	Checksum     string
+	CompletedAt  *time.Time
+	ErrorMessage string
 }
 
 // ProgressReader is an io.Reader wrapper that calls a callback function on each Read operation

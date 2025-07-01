@@ -109,6 +109,34 @@ func (d *DB) Migrate() error {
 		return fmt.Errorf("failed to create job_metadata table: %w", err)
 	}
 
+	// Create job_files table for tracking individual file progress
+	_, err = d.db.Exec(`
+		CREATE TABLE IF NOT EXISTS job_files (
+			job_id TEXT NOT NULL,
+			file_path TEXT NOT NULL,
+			relative_path TEXT NOT NULL,
+			size INTEGER NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			checksum TEXT,
+			completed_at TIMESTAMP,
+			error_message TEXT,
+			PRIMARY KEY (job_id, file_path),
+			FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to create job_files table: %w", err)
+	}
+
+	// Create index for faster queries
+	_, err = d.db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_job_files_status 
+		ON job_files(job_id, status)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to create job_files index: %w", err)
+	}
+
 	d.logger.Info("Database schema migrated")
 
 	return nil
