@@ -6,6 +6,13 @@ This system is designed to automatically upload data, from a local source (e.g.,
 
 The daemon and client can be downloaded from the [releases page](https://github.com/airoa-org/robot_data_autouploader/releases). 
 
+### Recommended Installation Method
+
+Run the playbook for uploader machine in the `hsr_devops` repository.
+Instructions for installation and operation can be found in the Data Collection Manual document.
+
+This playbook includes the auto-USB mounting configuration.
+
 ### Prerequisites
 
 - Linux x86_64 system
