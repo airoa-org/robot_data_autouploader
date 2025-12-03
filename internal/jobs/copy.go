@@ -213,7 +213,7 @@ func (w *CopyWorker) processJob(job *Job) {
 		w.logger.Infow("Attempting to delete original data from USB source after successful copy",
 			"jobID", job.ID,
 			"usb_source_path", job.Source)
-		
+
 		result, err := RemoveAllBestEffort(job.Source, w.logger)
 		if err != nil {
 			w.logger.Errorw("Error during deletion attempt",
@@ -221,7 +221,7 @@ func (w *CopyWorker) processJob(job *Job) {
 				"usb_source_path", job.Source,
 				"error", err)
 		}
-		
+
 		// Determine overall success/failure
 		if result.TotalFiles == result.DeletedFiles && result.TotalDirs == result.DeletedDirs {
 			w.logger.Infow("Successfully deleted all original data from USB source after copy",
@@ -239,7 +239,7 @@ func (w *CopyWorker) processJob(job *Job) {
 				"totalDirs", result.TotalDirs,
 				"failedFiles", len(result.FailedFiles),
 				"failedDirs", len(result.FailedDirs))
-			
+
 			// Log details about what couldn't be deleted
 			if len(result.FailedFiles) > 0 {
 				w.logger.Debugw("Files that could not be deleted from USB",
@@ -319,7 +319,7 @@ func (w *CopyWorker) copyDirectory(job *Job) error {
 		w.logger.Warnw("Failed to get completed files, will process all files", "jobID", job.ID, "error", err)
 	} else if len(completedFiles) > 0 {
 		w.logger.Infow("Found completed files from previous run", "jobID", job.ID, "count", len(completedFiles))
-		
+
 		// Create a map of completed files for fast lookup
 		completedMap := make(map[string]bool)
 		var completedSize int64
@@ -327,7 +327,7 @@ func (w *CopyWorker) copyDirectory(job *Job) error {
 			completedMap[cf.FilePath] = true
 			completedSize += cf.Size
 		}
-		
+
 		// Update processed size to reflect already completed files
 		job.ProcessedSize = completedSize
 		if job.TotalSize > 0 {
@@ -336,7 +336,7 @@ func (w *CopyWorker) copyDirectory(job *Job) error {
 		if errDb := w.persister.SaveJob(job); errDb != nil {
 			w.logger.Warnw("Failed to update job progress after checking completed files", "jobID", job.ID, "error", errDb)
 		}
-		
+
 		// Filter out already completed files
 		var pendingFiles []fileInfo
 		for _, file := range filesToCopy {
@@ -347,13 +347,13 @@ func (w *CopyWorker) copyDirectory(job *Job) error {
 			}
 		}
 		filesToCopy = pendingFiles
-		
+
 		if len(filesToCopy) == 0 {
 			w.logger.Infow("All files already completed", "jobID", job.ID)
 			return nil
 		}
 	}
-	
+
 	// Initialize file tracking for pending files
 	var jobFiles []*JobFile
 	for _, file := range filesToCopy {
@@ -366,7 +366,7 @@ func (w *CopyWorker) copyDirectory(job *Job) error {
 			Status:       "pending",
 		})
 	}
-	
+
 	if err := w.persister.SaveJobFiles(jobFiles); err != nil {
 		w.logger.Warnw("Failed to initialize file tracking, continuing anyway", "jobID", job.ID, "error", err)
 	}
@@ -385,7 +385,7 @@ func (w *CopyWorker) copyDirectory(job *Job) error {
 
 		// Copy the file
 		err = w.copySingleFileWithProgress(job, file.path, destPath)
-		
+
 		// Update file tracking status
 		now := time.Now()
 		jobFile := &JobFile{
@@ -394,7 +394,7 @@ func (w *CopyWorker) copyDirectory(job *Job) error {
 			RelativePath: relPath,
 			Size:         file.size,
 		}
-		
+
 		if err != nil {
 			jobFile.Status = "failed"
 			jobFile.ErrorMessage = err.Error()
@@ -402,19 +402,19 @@ func (w *CopyWorker) copyDirectory(job *Job) error {
 			jobFile.Status = "completed"
 			jobFile.CompletedAt = &now
 		}
-		
+
 		if trackErr := w.persister.SaveJobFile(jobFile); trackErr != nil {
-			w.logger.Warnw("Failed to update file tracking status", 
-				"jobID", job.ID, 
-				"file", file.path, 
+			w.logger.Warnw("Failed to update file tracking status",
+				"jobID", job.ID,
+				"file", file.path,
 				"status", jobFile.Status,
 				"error", trackErr)
 		}
-		
+
 		if err != nil {
 			return fmt.Errorf("failed to copy file %s: %w", file.path, err)
 		}
-		
+
 		// ProcessedSize is updated within copySingleFileWithProgress and then aggregated
 		// Update overall job progress after each file
 		if job.TotalSize > 0 { // Avoid division by zero if directory was empty

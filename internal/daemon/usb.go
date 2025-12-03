@@ -256,7 +256,7 @@ func (m *USBMonitor) checkMountedVolumes() {
 	}
 }
 
-// isDirCopiedToDestination checks the database to see if a directory has already been 
+// isDirCopiedToDestination checks the database to see if a directory has already been
 // successfully copied to the specific destination path.
 func (m *USBMonitor) isDirCopiedToDestination(sourcePath, destPath string) (bool, error) {
 	if m.db == nil {
@@ -293,6 +293,11 @@ func (m *USBMonitor) processDirectoryTask(deviceInfo *USBDeviceInfo) {
 	}
 	m.deviceMutex.Unlock()
 
+	// Check if directory should be excluded before creating copy job
+	if m.shouldCopyExcludeDirectory(deviceInfo.MountPoint) {
+		return
+	}
+
 	// Generate the destination directory name
 	destDirName := m.generateDestDirName(deviceInfo.VolumeLabel)
 	destPath := filepath.Join(m.config.Storage.Local.StagingDir, destDirName)
@@ -300,11 +305,11 @@ func (m *USBMonitor) processDirectoryTask(deviceInfo *USBDeviceInfo) {
 	// Check if this specific source-destination combination has already been copied
 	copied, err := m.isDirCopiedToDestination(deviceInfo.MountPoint, destPath)
 	if err != nil {
-		m.logger.Errorw("Failed to check if directory is already copied to destination", 
+		m.logger.Errorw("Failed to check if directory is already copied to destination",
 			"source", deviceInfo.MountPoint, "destination", destPath, "error", err)
 		// Continue with copy job creation despite the error
 	} else if copied {
-		m.logger.Infow("Directory already copied to this destination (found in DB)", 
+		m.logger.Infow("Directory already copied to this destination (found in DB)",
 			"source", deviceInfo.MountPoint, "destination", destPath)
 		// Update internal status to completed
 		m.deviceMutex.Lock()
@@ -344,7 +349,7 @@ func (m *USBMonitor) createCopyJobForDirectory(sourceDirPath, dirTaskID, destPat
 	m.deviceMutex.Lock()
 	deviceInfo, exists := m.devices[dirTaskID]
 	m.deviceMutex.Unlock()
-	
+
 	if exists {
 		job.AddMetadata("detected_at", deviceInfo.DetectedAt.Format(time.RFC3339))
 	} else {
@@ -448,4 +453,28 @@ func (m *USBMonitor) UpdateDeviceStatus(deviceID string, jobID string, status US
 	} else {
 		m.logger.Warnw("Device not found for status update", "deviceID", targetDeviceID, "jobID", jobID)
 	}
+}
+
+// shouldCopyExcludeDirectory checks if a directory should be excluded based on ExcludeDirectoryPatterns configuration
+func (m *USBMonitor) shouldCopyExcludeDirectory(dirPath string) bool {
+	dirName := filepath.Base(dirPath)
+
+	for _, pattern := range m.config.Copy.ExcludeDirectoryPatterns {
+		matched, err := filepath.Match(pattern, dirName)
+		if err != nil {
+			m.logger.Warnw("Error matching exclude directory pattern",
+				"pattern", pattern,
+				"directory", dirName,
+				"error", err)
+			continue
+		}
+		if matched {
+			m.logger.Infow("Skipping excluded directory, no copy job will be created",
+				"pattern", pattern,
+				"directory", dirPath,
+				"dirName", dirName)
+			return true
+		}
+	}
+	return false
 }

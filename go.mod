@@ -1,6 +1,6 @@
 module github.com/airoa-org/robot_data_pipeline/autoloader
 
-go 1.24.1
+go 1.24
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.36.3

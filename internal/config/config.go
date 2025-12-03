@@ -66,8 +66,9 @@ type JobsConfig struct {
 
 // CopyConfig contains file copy settings
 type CopyConfig struct {
-	ExcludePatterns   []string `mapstructure:"exclude_patterns"`
-	MinFreeSpaceRatio float64  `mapstructure:"min_free_space_ratio"` // Minimum ratio of free space to keep after copy (e.g. 0.1 for 10%)
+	ExcludePatterns          []string `mapstructure:"exclude_patterns"`
+	ExcludeDirectoryPatterns []string `mapstructure:"exclude_directory_patterns"`
+	MinFreeSpaceRatio        float64  `mapstructure:"min_free_space_ratio"` // Minimum ratio of free space to keep after copy (e.g. 0.1 for 10%)
 }
 
 // UploadConfig contains S3 upload settings
@@ -242,6 +243,7 @@ func setDefaultValues(v *viper.Viper) {
 
 	// Copy defaults
 	v.SetDefault("copy.exclude_patterns", []string{"*.tmp", "*.DS_Store"})
+	v.SetDefault("copy.exclude_directory_patterns", []string{"System Volume Information"})
 	v.SetDefault("copy.min_free_space_ratio", 0.05) // Default: keep at least 5% free space
 
 	// Upload defaults

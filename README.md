@@ -16,15 +16,68 @@ This playbook includes the auto-USB mounting configuration.
 ### Prerequisites
 
 - Linux x86_64 system
+- airoa-lineage installed (for data-lineage)
+
+### Setup data-lineage scripts
+
+Install `python3`.
+
+```sh
+sudo apt update
+sudo apt install -y --no-install-recommends \
+    git \
+    git-lfs \
+    build-essential \
+    python3 \
+    python3-pip \
+    python-is-python3
+```
+
+Install `airoa-lineage`.  
+
+You need to have access to the repository.  
+Use personal access token or other way.
+
+```sh
+pip install git+https://<personal-access-token>@github.com/airoa-org/airoa-lineage
+```
+
+Set environment variable.
+
+```sh
+echo "export MARQUEZ_URL=<url>" >> ~/.bashrc
+echo "export PATH=\$PATH:\$HOME/.local/bin" >> ~/.bashrc
+. ~/.bashrc
+```
+
+Check if the command is available.
+
+```sh
+$ airoa-lineage-usb-copy --version
+airoa-lineage-usb-copy x.x.x
+```
 
 ### Running the Daemon
+
+#### Binary
 
 The daemon is responsible for monitoring source directories or USB drives for new data, staging it, and uploading it to the configured storage solution. 
 
 ```bash
 ./robot-data-daemon-linux-x86_64 --config <path_to_config_file>
-# Example: go run cmd/daemon/main.go --config configs/config.yaml
-# For testing with MinIO: go run cmd/daemon/main.go --config testing/config-minio.yaml
+```
+
+#### Locally
+
+```bash
+go run cmd/daemon/main.go --config <path_to_config_file>
+```
+
+For testing with MinIO
+
+```bash
+docker compose -f testing/docker-compose.yml up -d
+go run cmd/daemon/main.go --config testing/config-minio.yaml
 ```
 
 ### Running the TUI Client
@@ -34,8 +87,16 @@ It must point to the same database as the daemon.
 
 When a upload job has failed, it can be retried from the TUI client.
 
+#### Binary
+
 ```bash
 ./robot-data-client-linux-x86_64 --db <path_to_db_file>
+```
+
+#### Locally
+
+```bash
+go run cmd/client/main.go --db <path_to_db_file>
 ```
 
 #### Screenshots 
@@ -112,6 +173,7 @@ The system is configured via a YAML file (e.g., `testing/config-minio.yaml`). Be
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `exclude_patterns` | []string | `["*.tmp", "*.DS_Store"]` | File patterns to exclude during copy operations |
+| `exclude_directory_patterns` | []string | `["System Volume Information"]` | Directory patterns to exclude during copy operations |
 | `min_free_space_ratio` | float64 | `0.05` | Minimum free space ratio to maintain (0.05 = 5%) |
 
 ### Upload Settings (`upload`)
