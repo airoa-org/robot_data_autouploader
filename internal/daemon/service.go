@@ -10,6 +10,7 @@ import (
 	appconfig "github.com/airoa-org/robot_data_pipeline/autoloader/internal/config"
 	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/jobops"
 	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/jobs"
+	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/lineage"
 	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/storage"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -17,14 +18,15 @@ import (
 
 // Service represents the daemon service
 type Service struct {
-	config       *appconfig.Config
-	logger       *zap.SugaredLogger
-	db           *storage.DB
-	copyQueue    *jobs.Queue
-	uploadQueue  *jobs.Queue
-	copyWorker   *jobs.CopyWorker
-	uploadWorker *jobs.UploadWorker
-	usbMonitor   USBDetector
+	config        *appconfig.Config
+	logger        *zap.SugaredLogger
+	db            *storage.DB
+	copyQueue     *jobs.Queue
+	uploadQueue   *jobs.Queue
+	copyWorker    *jobs.CopyWorker
+	uploadWorker  *jobs.UploadWorker
+	usbMonitor    USBDetector
+	lineageClient *lineage.Client
 
 	ctx        context.Context
 	cancelFunc context.CancelFunc
@@ -76,6 +78,9 @@ func (s *Service) Start() error {
 	if err := s.initJobQueues(); err != nil {
 		return fmt.Errorf("failed to initialize job queues: %w", err)
 	}
+
+	// Initialize lineage client
+	s.initLineageClient()
 
 	// Initialize workers
 	if err := s.initWorkers(); err != nil {
@@ -270,6 +275,7 @@ func (s *Service) initWorkers() error {
 		s.config,
 		persister, // Pass the asserted persister
 		s.logger,
+		s.lineageClient, // Pass lineage client
 	)
 
 	// Create upload worker
@@ -278,6 +284,7 @@ func (s *Service) initWorkers() error {
 		s.config,
 		persister, // Pass the asserted persister
 		s.logger,
+		s.lineageClient, // Pass lineage client
 	)
 
 	s.logger.Info("Workers initialized")
@@ -448,6 +455,12 @@ func (s *Service) checkForNewJobs() error {
 	}
 
 	return nil
+}
+
+// initLineageClient initializes the lineage client
+func (s *Service) initLineageClient() {
+	s.logger.Info("Initializing lineage client")
+	s.lineageClient = lineage.NewClient(s.config, s.logger)
 }
 
 // RecreateUploadJob recreates an upload job and adds it to the upload queue

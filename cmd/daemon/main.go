@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	appconfig "github.com/airoa-org/robot_data_pipeline/autoloader/internal/config"
 	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/daemon"
 	"go.uber.org/zap"
 )
@@ -21,7 +22,14 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Println(version)
+		// Show build information
+		buildInfo := appconfig.GetBuildInfo()
+		fmt.Printf("Version: %s\n", appconfig.GetVersionString())
+		fmt.Printf("Git Hash: %s\n", buildInfo["git_hash"])
+		fmt.Printf("Git Branch: %s\n", buildInfo["git_branch"])
+		fmt.Printf("Git Tag: %s\n", buildInfo["git_tag"])
+		fmt.Printf("Git Remote: %s\n", buildInfo["git_remote"])
+		fmt.Printf("Build Time: %s\n", buildInfo["build_time"])
 		os.Exit(0)
 	}
 

@@ -12,32 +12,35 @@ import (
 	"time"
 
 	appconfig "github.com/airoa-org/robot_data_pipeline/autoloader/internal/config"
+	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/lineage"
 	"go.uber.org/zap"
 )
 
 // CopyWorker handles file copy jobs
 type CopyWorker struct {
-	queue       *Queue
-	uploadQueue *Queue
-	config      *appconfig.Config
-	logger      *zap.SugaredLogger
-	persister   JobPersister
-	ctx         context.Context
-	cancelFunc  context.CancelFunc
+	queue         *Queue
+	uploadQueue   *Queue
+	config        *appconfig.Config
+	logger        *zap.SugaredLogger
+	persister     JobPersister
+	lineageClient *lineage.Client
+	ctx           context.Context
+	cancelFunc    context.CancelFunc
 }
 
 // NewCopyWorker creates a new copy worker
-func NewCopyWorker(queue *Queue, uploadQueue *Queue, cfg *appconfig.Config, persister JobPersister, logger *zap.SugaredLogger) *CopyWorker { // Changed db to persister
+func NewCopyWorker(queue *Queue, uploadQueue *Queue, cfg *appconfig.Config, persister JobPersister, logger *zap.SugaredLogger, lineageClient *lineage.Client) *CopyWorker {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &CopyWorker{
-		queue:       queue,
-		uploadQueue: uploadQueue,
-		config:      cfg,
-		logger:      logger,
-		persister:   persister, // Initialize persister field
-		ctx:         ctx,
-		cancelFunc:  cancel,
+		queue:         queue,
+		uploadQueue:   uploadQueue,
+		config:        cfg,
+		logger:        logger,
+		persister:     persister,
+		lineageClient: lineageClient,
+		ctx:           ctx,
+		cancelFunc:    cancel,
 	}
 }
 
@@ -91,6 +94,23 @@ func (w *CopyWorker) processJob(job *Job) {
 		"jobID", job.ID,
 		"source", job.Source,
 		"destination", job.Destination)
+
+	// Initialize lineage run ID variable for use throughout the function
+	var lineageRunID string
+
+	runID, err := w.lineageClient.StartUSBCopySession(w.ctx, job.Source)
+	if err != nil {
+		w.logger.Errorw("Failed to start lineage session for copy job",
+			"jobID", job.ID,
+			"error", err)
+		// Continue without lineage tracking
+	} else {
+		lineageRunID = runID
+		job.AddMetadata("lineage_run_id", lineageRunID)
+		w.logger.Infow("Started lineage session for copy job",
+			"jobID", job.ID,
+			"lineageRunID", lineageRunID)
+	}
 
 	// Update job status
 	job.UpdateStatus(JobStatusInProgress)
@@ -195,6 +215,16 @@ func (w *CopyWorker) processJob(job *Job) {
 		if errDb := w.persister.SaveJob(job); errDb != nil { // Use persister
 			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
 		}
+
+		// Cancel lineage session on error
+		if lineageRunID != "" {
+			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID); cancelErr != nil {
+				w.logger.Errorw("Failed to cancel lineage session after copy error",
+					"jobID", job.ID,
+					"lineageRunID", lineageRunID,
+					"error", cancelErr)
+			}
+		}
 		return
 	}
 
@@ -207,6 +237,21 @@ func (w *CopyWorker) processJob(job *Job) {
 	}
 
 	w.logger.Infow("Copy job completed successfully to staging area", "jobID", job.ID, "source", job.Source, "destination", job.Destination)
+
+	// Complete lineage session on success
+	if lineageRunID != "" {
+		if completeErr := w.lineageClient.CompleteUSBCopySession(w.ctx, lineageRunID); completeErr != nil {
+			w.logger.Errorw("Failed to complete lineage session after successful copy",
+				"jobID", job.ID,
+				"lineageRunID", lineageRunID,
+				"error", completeErr)
+			// Don't fail the job, just log the error
+		} else {
+			w.logger.Infow("Completed lineage session for copy job",
+				"jobID", job.ID,
+				"lineageRunID", lineageRunID)
+		}
+	}
 
 	if w.config.Storage.Local.RetentionPolicyOnCopy == "delete" {
 		// Delete the original files/directory from the USB source after successful copy
@@ -506,6 +551,9 @@ func (w *CopyWorker) createUploadJob(copyJob *Job) {
 	}
 	if dirTaskID, ok := copyJob.Metadata["dir_task_id"]; ok {
 		uploadJob.AddMetadata("dir_task_id", dirTaskID)
+	}
+	if lineageRunID, ok := copyJob.Metadata["lineage_run_id"]; ok {
+		uploadJob.AddMetadata("parent_lineage_run_id", lineageRunID)
 	}
 
 	// Save the new upload job to the database

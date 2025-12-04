@@ -4,7 +4,7 @@ This system is designed to automatically upload data, from a local source (e.g.,
 
 ## Running the System
 
-The daemon and client can be downloaded from the [releases page](https://github.com/airoa-org/robot_data_autouploader/releases). 
+The daemon and client can be downloaded from the [releases page](https://github.com/airoa-org/robot_data_autouploader/releases).
 
 ### Recommended Installation Method
 
@@ -33,7 +33,7 @@ sudo apt install -y --no-install-recommends \
     python-is-python3
 ```
 
-Install `airoa-lineage`.  
+Install `airoa-lineage`.
 
 You need to have access to the repository.  
 Use personal access token or other way.
@@ -53,15 +53,15 @@ echo "export PATH=\$PATH:\$HOME/.local/bin" >> ~/.bashrc
 Check if the command is available.
 
 ```sh
-$ airoa-lineage-usb-copy --version
-airoa-lineage-usb-copy x.x.x
+airoa-lineage-usb-copy --version
+airoa-lineage-s3-upload --version
 ```
 
 ### Running the Daemon
 
 #### Binary
 
-The daemon is responsible for monitoring source directories or USB drives for new data, staging it, and uploading it to the configured storage solution. 
+The daemon is responsible for monitoring source directories or USB drives for new data, staging it, and uploading it to the configured storage solution.
 
 ```bash
 ./robot-data-daemon-linux-x86_64 --config <path_to_config_file>
@@ -114,11 +114,49 @@ go run cmd/client/main.go --db <path_to_db_file>
 
 ### Building
 
-#### On MacOS
+This project includes build scripts that embed git repository information into the binaries.
 
-`docker run --rm --platform=linux/amd64 -v "$(pwd):/app" -w /app golang:1.24 sh -c "apt-get update && apt-get install -y libsqlite3-dev && CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o robot-data-daemon ./cmd/daemon/main.go"`
+#### Using the Build Script
 
-Make sure to build on linux/amd64, and by using a OS with glibc (e.g., Ubuntu) to avoid issues with CGO.
+The easiest way to build with embedded git information:
+
+```bash
+./build.sh
+```
+
+This will:
+- Extract git information (hash, branch, tag, remote URL)
+- Build both daemon and client binaries in the `bin/` directory
+- Embed build information for version tracking
+
+#### Using Make
+
+```bash
+# Build all binaries
+make build
+
+# Build individual components
+make build-daemon
+make build-client
+```
+
+#### Docker Build for Linux (from macOS)
+
+```bash
+docker run --rm --platform=linux/amd64 -v "$(pwd):/app" -w /app golang:1.24 sh -c "
+  apt-get update && apt-get install -y libsqlite3-dev && 
+  CGO_ENABLED=1 GOOS=linux GOARCH=amd64 ./build.sh
+"
+```
+
+#### Version Information
+
+After building, you can check the embedded version information:
+
+```bash
+./bin/robot_data_daemon -v
+./bin/robot_data_client -v
+```
 
 ## Configuration
 
