@@ -178,6 +178,14 @@ func (w *UploadWorker) processJob(job *Job) {
 		if errDb := w.persister.SaveJob(job); errDb != nil { // Use persister
 			w.logger.Errorw("Failed to save job error status to DB (S3 client init failure)", "jobID", job.ID, "error", errDb)
 		}
+		if lineageRunID != "" {
+			if cancelErr := w.lineageClient.CancelS3UploadSession(w.ctx, lineageRunID); cancelErr != nil {
+				w.logger.Errorw("Failed to cancel lineage session after upload error",
+					"jobID", job.ID,
+					"lineageRunID", lineageRunID,
+					"error", cancelErr)
+			}
+		}
 		return
 	}
 
@@ -191,6 +199,14 @@ func (w *UploadWorker) processJob(job *Job) {
 		job.SetError(fmt.Errorf("source file not found: %w", err))
 		if errDb := w.persister.SaveJob(job); errDb != nil { // Use persister
 			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
+		}
+		if lineageRunID != "" {
+			if cancelErr := w.lineageClient.CancelS3UploadSession(w.ctx, lineageRunID); cancelErr != nil {
+				w.logger.Errorw("Failed to cancel lineage session after upload error",
+					"jobID", job.ID,
+					"lineageRunID", lineageRunID,
+					"error", cancelErr)
+			}
 		}
 		return
 	}
@@ -210,8 +226,6 @@ func (w *UploadWorker) processJob(job *Job) {
 		if errDb := w.persister.SaveJob(job); errDb != nil { // Use persister
 			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
 		}
-
-		// Cancel lineage session on error
 		if lineageRunID != "" {
 			if cancelErr := w.lineageClient.CancelS3UploadSession(w.ctx, lineageRunID); cancelErr != nil {
 				w.logger.Errorw("Failed to cancel lineage session after upload error",

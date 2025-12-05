@@ -145,6 +145,14 @@ func (w *CopyWorker) processJob(job *Job) {
 		if errDb := w.persister.SaveJob(job); errDb != nil {
 			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
 		}
+		if lineageRunID != "" {
+			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID); cancelErr != nil {
+				w.logger.Errorw("Failed to cancel lineage session after copy error",
+					"jobID", job.ID,
+					"lineageRunID", lineageRunID,
+					"error", cancelErr)
+			}
+		}
 		return
 	}
 
@@ -179,6 +187,14 @@ func (w *CopyWorker) processJob(job *Job) {
 		if errDb := w.persister.SaveJob(job); errDb != nil {
 			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
 		}
+		if lineageRunID != "" {
+			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID); cancelErr != nil {
+				w.logger.Errorw("Failed to cancel lineage session after copy error",
+					"jobID", job.ID,
+					"lineageRunID", lineageRunID,
+					"error", cancelErr)
+			}
+		}
 		return
 	}
 
@@ -196,6 +212,14 @@ func (w *CopyWorker) processJob(job *Job) {
 		job.SetError(fmt.Errorf("failed to create destination directory: %w", err))
 		if errDb := w.persister.SaveJob(job); errDb != nil { // Use persister
 			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
+		}
+		if lineageRunID != "" {
+			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID); cancelErr != nil {
+				w.logger.Errorw("Failed to cancel lineage session after copy error",
+					"jobID", job.ID,
+					"lineageRunID", lineageRunID,
+					"error", cancelErr)
+			}
 		}
 		return
 	}
@@ -215,8 +239,6 @@ func (w *CopyWorker) processJob(job *Job) {
 		if errDb := w.persister.SaveJob(job); errDb != nil { // Use persister
 			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
 		}
-
-		// Cancel lineage session on error
 		if lineageRunID != "" {
 			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID); cancelErr != nil {
 				w.logger.Errorw("Failed to cancel lineage session after copy error",
