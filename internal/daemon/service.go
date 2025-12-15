@@ -65,6 +65,11 @@ func NewService(configPath string) (*Service, error) {
 	return svc, nil
 }
 
+// GetConfig returns the service configuration
+func (s *Service) GetConfig() *appconfig.Config {
+	return s.config
+}
+
 // Start starts the daemon service
 func (s *Service) Start() error {
 	s.logger.Info("Starting daemon service")
@@ -461,6 +466,13 @@ func (s *Service) checkForNewJobs() error {
 func (s *Service) initLineageClient() {
 	s.logger.Info("Initializing lineage client")
 	s.lineageClient = lineage.NewClient(s.config, s.logger)
+
+	// Validate lineage configuration if enabled
+	if lineage.IsEnabled(s.config) {
+		if err := lineage.ValidateConfig(s.config); err != nil {
+			s.logger.Fatalw("Lineage configuration validation failed", "error", err)
+		}
+	}
 }
 
 // RecreateUploadJob recreates an upload job and adds it to the upload queue

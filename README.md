@@ -42,19 +42,19 @@ Use personal access token or other way.
 pip install git+https://<personal-access-token>@github.com/airoa-org/airoa-lineage
 ```
 
-Set environment variable.
-
-```sh
-echo "export MARQUEZ_URL=<url>" >> ~/.bashrc
-echo "export PATH=\$PATH:\$HOME/.local/bin" >> ~/.bashrc
-. ~/.bashrc
-```
-
 Check if the command is available.
 
 ```sh
 airoa-lineage-usb-copy --version
 airoa-lineage-s3-upload --version
+```
+
+### Add to config file
+
+```yaml
+lineage:
+  enabled: true
+  marquez_url: "https://url-for-marquez"
 ```
 
 ### Running the Daemon

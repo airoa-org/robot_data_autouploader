@@ -26,8 +26,50 @@ func NewClient(config *appconfig.Config, logger *zap.SugaredLogger) *Client {
 	}
 }
 
+// IsEnabled checks if lineage functionality is enabled via configuration
+// This is a package-level function that can be called without a client instance
+func IsEnabled(config *appconfig.Config) bool {
+	return config.Lineage.Enabled
+}
+
+// ValidateConfig validates required configuration when lineage is enabled
+// This is a package-level function that can be called without a client instance
+func ValidateConfig(config *appconfig.Config) error {
+	if !config.Lineage.Enabled {
+		return nil
+	}
+
+	if config.Lineage.MarquezURL == "" {
+		return fmt.Errorf("MarquezURL is required when lineage.enabled=true")
+	}
+
+	return nil
+}
+
+// isEnabled checks if lineage functionality is enabled via configuration
+func (c *Client) isEnabled() bool {
+	return IsEnabled(c.config)
+}
+
+// validateConfig validates required configuration when lineage is enabled
+func (c *Client) validateConfig() error {
+	return ValidateConfig(c.config)
+}
+
 // StartUSBCopySession starts a USB copy lineage session
 func (c *Client) StartUSBCopySession(ctx context.Context, sourceDir string) (string, error) {
+	// Check if lineage is enabled
+	if !c.isEnabled() {
+		c.logger.Debug("Lineage is disabled, skipping USB copy session start")
+		return "", nil
+	}
+
+	// Validate configuration
+	if err := c.validateConfig(); err != nil {
+		c.logger.Errorw("Configuration validation failed", "error", err)
+		return "", err
+	}
+
 	// Load metadata from source directory
 	if err := c.loadMetaData(sourceDir); err != nil {
 		c.logger.Errorw("Failed to load metadata from source directory", "error", err, "sourceDir", sourceDir)
@@ -51,6 +93,18 @@ func (c *Client) StartUSBCopySession(ctx context.Context, sourceDir string) (str
 
 // CompleteUSBCopySession completes a USB copy lineage session
 func (c *Client) CompleteUSBCopySession(ctx context.Context, runID string) error {
+	// Check if lineage is enabled
+	if !c.isEnabled() {
+		c.logger.Debug("Lineage is disabled, skipping USB copy session complete")
+		return nil
+	}
+
+	// Validate configuration
+	if err := c.validateConfig(); err != nil {
+		c.logger.Errorw("Configuration validation failed", "error", err)
+		return err
+	}
+
 	if runID == "" {
 		c.logger.Debug("No run ID, skipping USB copy session complete")
 		return nil
@@ -72,6 +126,18 @@ func (c *Client) CompleteUSBCopySession(ctx context.Context, runID string) error
 
 // CancelUSBCopySession cancels a USB copy lineage session
 func (c *Client) CancelUSBCopySession(ctx context.Context, runID string) error {
+	// Check if lineage is enabled
+	if !c.isEnabled() {
+		c.logger.Debug("Lineage is disabled, skipping USB copy session cancel")
+		return nil
+	}
+
+	// Validate configuration
+	if err := c.validateConfig(); err != nil {
+		c.logger.Errorw("Configuration validation failed", "error", err)
+		return err
+	}
+
 	if runID == "" {
 		c.logger.Debug("No run ID, skipping USB copy session cancel")
 		return nil
@@ -94,6 +160,18 @@ func (c *Client) CancelUSBCopySession(ctx context.Context, runID string) error {
 
 // StartS3UploadSession starts a S3 upload lineage session
 func (c *Client) StartS3UploadSession(ctx context.Context, sourceDir string) (string, error) {
+	// Check if lineage is enabled
+	if !c.isEnabled() {
+		c.logger.Debug("Lineage is disabled, skipping S3 upload session start")
+		return "", nil
+	}
+
+	// Validate configuration
+	if err := c.validateConfig(); err != nil {
+		c.logger.Errorw("Configuration validation failed", "error", err)
+		return "", err
+	}
+
 	// Load metadata from source directory (reuse the same metadata from copy session)
 	if err := c.loadMetaData(sourceDir); err != nil {
 		c.logger.Errorw("Failed to load metadata from source directory", "error", err, "sourceDir", sourceDir)
@@ -117,6 +195,18 @@ func (c *Client) StartS3UploadSession(ctx context.Context, sourceDir string) (st
 
 // CompleteS3UploadSession completes a S3 upload lineage session
 func (c *Client) CompleteS3UploadSession(ctx context.Context, runID string) error {
+	// Check if lineage is enabled
+	if !c.isEnabled() {
+		c.logger.Debug("Lineage is disabled, skipping S3 upload session complete")
+		return nil
+	}
+
+	// Validate configuration
+	if err := c.validateConfig(); err != nil {
+		c.logger.Errorw("Configuration validation failed", "error", err)
+		return err
+	}
+
 	if runID == "" {
 		c.logger.Debug("No run ID, skipping S3 upload session complete")
 		return nil
@@ -138,6 +228,18 @@ func (c *Client) CompleteS3UploadSession(ctx context.Context, runID string) erro
 
 // CancelS3UploadSession cancels a S3 upload lineage session
 func (c *Client) CancelS3UploadSession(ctx context.Context, runID string) error {
+	// Check if lineage is enabled
+	if !c.isEnabled() {
+		c.logger.Debug("Lineage is disabled, skipping S3 upload session cancel")
+		return nil
+	}
+
+	// Validate configuration
+	if err := c.validateConfig(); err != nil {
+		c.logger.Errorw("Configuration validation failed", "error", err)
+		return err
+	}
+
 	if runID == "" {
 		c.logger.Debug("No run ID, skipping S3 upload session cancel")
 		return nil

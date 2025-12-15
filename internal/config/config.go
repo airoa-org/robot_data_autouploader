@@ -97,6 +97,7 @@ type UploadConfig struct {
 
 // LineageConfig contains airoa-lineage tracking settings
 type LineageConfig struct {
+	Enabled          bool   `mapstructure:"enabled"`
 	CopyExecutable   string `mapstructure:"copy_executable"`
 	UploadExecutable string `mapstructure:"upload_executable"`
 	Namespace        string `mapstructure:"namespace"`
@@ -285,6 +286,7 @@ func setDefaultValues(v *viper.Viper) {
 	v.SetDefault("upload.allowed_patterns", []string{"data.bag", "meta.json"}) // Empty = allow all files
 
 	// Lineage defaults
+	v.SetDefault("lineage.enabled", false)
 	v.SetDefault("lineage.namespace", "airoa")
 	v.SetDefault("lineage.copy_executable", "airoa-lineage-usb-copy")
 	v.SetDefault("lineage.upload_executable", "airoa-lineage-s3-upload")

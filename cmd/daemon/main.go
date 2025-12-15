@@ -10,6 +10,7 @@ import (
 
 	appconfig "github.com/airoa-org/robot_data_pipeline/autoloader/internal/config"
 	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/daemon"
+	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/lineage"
 	"go.uber.org/zap"
 )
 
@@ -47,6 +48,23 @@ func main() {
 	if err != nil {
 		sugar.Errorw("Failed to create daemon service", "error", err)
 		os.Exit(1)
+	}
+
+	// Validate lineage configuration if enabled
+	config := service.GetConfig()
+	if lineage.IsEnabled(config) {
+		sugar.Infow("Lineage configuration details",
+			"enabled", config.Lineage.Enabled,
+			"marquez_url", config.Lineage.MarquezURL,
+			"namespace", config.Lineage.Namespace)
+
+		if err := lineage.ValidateConfig(config); err != nil {
+			sugar.Errorw("Lineage configuration validation failed", "error", err)
+			sugar.Errorw("Set lineage.enabled=true and lineage.marquez_url in config file")
+			os.Exit(1)
+		}
+	} else {
+		sugar.Info("Lineage is disabled")
 	}
 
 	// Set up signal handling

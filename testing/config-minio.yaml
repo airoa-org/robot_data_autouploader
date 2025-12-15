@@ -39,7 +39,7 @@ copy:
     - "*.DS_Store"
   exclude_directory_patterns:
     - "System Volume Information"
-  min_free_space_ratio: 0.05
+  min_free_space_ratio: 0.01
 
 upload:
   parallelism: 1
@@ -48,3 +48,7 @@ upload:
   allowed_patterns:
     - data.bag
     - meta.json
+
+lineage:
+  enabled: true
+  marquez_url: https://d2y9u46j2wwos6.cloudfront.net
