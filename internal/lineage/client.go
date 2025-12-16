@@ -3,6 +3,7 @@ package lineage
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -259,6 +260,16 @@ func (c *Client) CancelS3UploadSession(ctx context.Context, runID string) error 
 	return nil
 }
 
+// getHostname returns the hostname of the current machine
+func (c *Client) getHostname() string {
+	hostname, err := os.Hostname()
+	if err != nil {
+		c.logger.Warnw("Failed to get hostname, using 'unknown'", "error", err)
+		return "unknown"
+	}
+	return hostname
+}
+
 // buildUSBCopyArgs builds common arguments
 func (c *Client) buildUSBCopyArgs(command string) []string {
 	args := []string{command}
@@ -268,6 +279,7 @@ func (c *Client) buildUSBCopyArgs(command string) []string {
 	args = append(args, "--job-name", "usb-data-copy")
 	args = append(args, "--robot-id", c.robotID)
 	args = append(args, "--location", c.locationName)
+	args = append(args, "--hostname", c.getHostname())
 	if c.config.Lineage.MarquezURL != "" {
 		args = append(args, "--marquez-url", c.config.Lineage.MarquezURL)
 	}
@@ -293,6 +305,7 @@ func (c *Client) buildS3UploadArgs(command string) []string {
 	args = append(args, "--job-name", "s3-data-upload")
 	args = append(args, "--robot-id", c.robotID)
 	args = append(args, "--location", c.locationName)
+	args = append(args, "--hostname", c.getHostname())
 	if c.config.Lineage.MarquezURL != "" {
 		args = append(args, "--marquez-url", c.config.Lineage.MarquezURL)
 	}
