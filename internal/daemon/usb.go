@@ -2,8 +2,10 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -322,7 +324,7 @@ func (m *USBMonitor) processDirectoryTask(deviceInfo *USBDeviceInfo) {
 	}
 
 	// The source for the copy job is the MountPoint of the deviceInfo, which is the directory path.
-	m.createCopyJobForDirectory(deviceInfo.MountPoint, deviceInfo.ID, destPath)
+	m.createCopyJobForDirectory(deviceInfo.MountPoint, deviceInfo, destPath)
 }
 
 // generateDestDirName creates a directory name in the format <timestamp>_<USBDRIVENAME>
@@ -337,13 +339,17 @@ func (m *USBMonitor) generateDestDirName(usbName string) string {
 }
 
 // createCopyJobForDirectory creates a copy job for the specified source directory.
-func (m *USBMonitor) createCopyJobForDirectory(sourceDirPath, dirTaskID, destPath string) {
+func (m *USBMonitor) createCopyJobForDirectory(sourceDirPath string, deviceInfo *USBDeviceInfo, destPath string) {
 	dirName := filepath.Base(sourceDirPath)
-
+	dirTaskID := deviceInfo.ID
 	// Call NewJob with its current signature (no db argument)
 	job := jobs.NewJob(jobs.JobTypeCopy, sourceDirPath, destPath)
 	job.AddMetadata("directory_name", dirName)
 	job.AddMetadata("dir_task_id", dirTaskID)
+	job.AddMetadata("source_directory", sourceDirPath)
+	job.AddMetadata("destination_directory", destPath)
+	job.AddMetadata("volume_name", deviceInfo.VolumeName)
+	job.AddMetadata("volume_label", deviceInfo.VolumeLabel)
 
 	// Retrieve DetectedAt from the stored deviceInfo to add to metadata
 	m.deviceMutex.Lock()
@@ -355,6 +361,29 @@ func (m *USBMonitor) createCopyJobForDirectory(sourceDirPath, dirTaskID, destPat
 	} else {
 		job.AddMetadata("detected_at", time.Now().Format(time.RFC3339))
 		m.logger.Warnw("Device info not found in map when creating job metadata for detected_at", "dirTaskID", dirTaskID)
+	}
+
+	// Get Filesystem ID and type
+	fsID, fsType := m.getFilesystemInfo(sourceDirPath)
+	job.AddMetadata("fs_id", fsID)
+	job.AddMetadata("fs_type", fsType)
+
+	// Add file list and hashes to metadata
+	srcFiles, err := jobs.ScanDirectoryForFiles(sourceDirPath, &jobs.FileScanOptions{
+		Logger: m.logger,
+	})
+	if err != nil {
+		m.logger.Warnw("Failed to scan directory for files", "source", sourceDirPath, "error", err)
+		srcFiles = []jobs.FileInfo{} // Use empty list if scanning fails
+	}
+
+	// Convert srcFiles to JSON string for metadata
+	srcFilesJSON, err := json.Marshal(srcFiles)
+	if err != nil {
+		m.logger.Warnw("Failed to marshal src_files to JSON", "error", err)
+		job.AddMetadata("src_files", "[]") // Use empty array string if marshaling fails
+	} else {
+		job.AddMetadata("src_files", string(srcFilesJSON))
 	}
 
 	// Persist the newly created job to the database using SaveJob
@@ -477,4 +506,45 @@ func (m *USBMonitor) shouldCopyExcludeDirectory(dirPath string) bool {
 		}
 	}
 	return false
+}
+
+// getFilesystemInfo attempts to get filesystem ID and type from stat -f output
+func (m *USBMonitor) getFilesystemInfo(path string) (fsID string, fsType string) {
+	// Use stat -f to get detailed filesystem information
+	cmd := exec.Command("stat", "-f", path)
+	output, err := cmd.Output()
+	if err != nil {
+		m.logger.Debugw("Failed to get filesystem info using stat -f", "path", path, "error", err)
+		return "unknown", "unknown"
+	}
+
+	// Parse stat -f output to extract ID and Type
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, "ID:") && strings.Contains(line, "Type:") {
+			// Line format: "ID: 3000000400000018 Namelen: ?       Type: ntfs"
+			parts := strings.Fields(line)
+			for i, part := range parts {
+				if part == "ID:" && i+1 < len(parts) {
+					fsID = parts[i+1]
+				}
+				if part == "Type:" && i+1 < len(parts) {
+					fsType = parts[i+1]
+				}
+			}
+			break
+		}
+	}
+
+	// Set defaults if parsing failed
+	if fsID == "" {
+		fsID = "unknown"
+	}
+	if fsType == "" {
+		fsType = "unknown"
+	}
+
+	m.logger.Debugw("Extracted disk info", "path", path, "fsID", fsID, "fsType", fsType)
+	return fsID, fsType
 }

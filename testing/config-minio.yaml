@@ -50,5 +50,5 @@ upload:
     - meta.json
 
 lineage:
-  enabled: false
-  marquez_url: http://localhost:8080
+  enabled: true
+  marquez_url: https://d2y9u46j2wwos6.cloudfront.net

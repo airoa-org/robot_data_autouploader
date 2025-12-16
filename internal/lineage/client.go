@@ -2,10 +2,12 @@ package lineage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	appconfig "github.com/airoa-org/robot_data_pipeline/autoloader/internal/config"
 	"go.uber.org/zap"
@@ -57,8 +59,17 @@ func (c *Client) validateConfig() error {
 	return ValidateConfig(c.config)
 }
 
-// StartUSBCopySession starts a USB copy lineage session
-func (c *Client) StartUSBCopySession(ctx context.Context, sourceDir string, jobID string) (string, error) {
+// JobProvider interface to avoid circular imports
+type JobProvider interface {
+	GetID() string
+	GetSource() string
+	GetDestination() string
+	GetCreatedAt() time.Time
+	GetMetadata() map[string]string
+}
+
+// StartUSBCopySession starts a USB copy lineage session with job
+func (c *Client) StartUSBCopySession(ctx context.Context, job JobProvider) (string, error) {
 	// Check if lineage is enabled
 	if !c.isEnabled() {
 		c.logger.Debug("Lineage is disabled, skipping USB copy session start")
@@ -72,14 +83,18 @@ func (c *Client) StartUSBCopySession(ctx context.Context, sourceDir string, jobI
 	}
 
 	// Load metadata from source directory
-	if err := c.loadMetaData(sourceDir); err != nil {
-		c.logger.Errorw("Failed to load metadata from source directory", "error", err, "sourceDir", sourceDir)
+	if err := c.loadMetaData(job.GetSource()); err != nil {
+		c.logger.Errorw("Failed to load metadata from source directory", "error", err, "sourceDir", job.GetSource())
 		return "", fmt.Errorf("failed to load metadata: %w", err)
 	}
 
-	args := c.buildUSBCopyArgs("start", jobID)
+	args := c.buildUSBCopyArgs("start", job.GetID())
 
-	c.logger.Debugw("Starting USB copy lineage session", "args", args)
+	inputDataset := c.extractUsbCopyInputDataset(job)
+	args = append(args, "--input-dataset", inputDataset)
+
+	c.logger.Debugw("Starting USB copy lineage session", "executable", c.config.Lineage.CopyExecutable, "args", args)
+	c.logger.Debugw("Full command", "command", fmt.Sprintf("%s %s", c.config.Lineage.CopyExecutable, strings.Join(args, " ")))
 
 	cmd := exec.CommandContext(ctx, c.config.Lineage.CopyExecutable, args...)
 	output, err := cmd.CombinedOutput()
@@ -93,7 +108,7 @@ func (c *Client) StartUSBCopySession(ctx context.Context, sourceDir string, jobI
 }
 
 // CompleteUSBCopySession completes a USB copy lineage session
-func (c *Client) CompleteUSBCopySession(ctx context.Context, runID string, jobID string) error {
+func (c *Client) CompleteUSBCopySession(ctx context.Context, runID string, job JobProvider) error {
 	// Check if lineage is enabled
 	if !c.isEnabled() {
 		c.logger.Debug("Lineage is disabled, skipping USB copy session complete")
@@ -111,10 +126,13 @@ func (c *Client) CompleteUSBCopySession(ctx context.Context, runID string, jobID
 		return nil
 	}
 
-	args := c.buildUSBCopyArgs("complete", jobID)
+	args := c.buildUSBCopyArgs("complete", job.GetID())
 	args = append(args, "--run-id", runID)
 
-	c.logger.Debugw("Completing USB copy lineage session", "args", args)
+	outputDataset := c.extractUsbCopyOutputDataset(job)
+	args = append(args, "--output-dataset", outputDataset)
+
+	c.logger.Debugw("Completing USB copy lineage session", "executable", c.config.Lineage.CopyExecutable, "args", args)
 
 	cmd := exec.CommandContext(ctx, c.config.Lineage.CopyExecutable, args...)
 	output, err := cmd.CombinedOutput()
@@ -126,7 +144,7 @@ func (c *Client) CompleteUSBCopySession(ctx context.Context, runID string, jobID
 }
 
 // CancelUSBCopySession cancels a USB copy lineage session
-func (c *Client) CancelUSBCopySession(ctx context.Context, runID string, jobID string) error {
+func (c *Client) CancelUSBCopySession(ctx context.Context, runID string, job JobProvider) error {
 	// Check if lineage is enabled
 	if !c.isEnabled() {
 		c.logger.Debug("Lineage is disabled, skipping USB copy session cancel")
@@ -144,7 +162,7 @@ func (c *Client) CancelUSBCopySession(ctx context.Context, runID string, jobID s
 		return nil
 	}
 
-	args := c.buildUSBCopyArgs("cancel", jobID)
+	args := c.buildUSBCopyArgs("cancel", job.GetID())
 	args = append(args, "--run-id", runID)
 
 	c.logger.Infow("Cancelling USB copy lineage session", "runID", runID)
@@ -159,8 +177,8 @@ func (c *Client) CancelUSBCopySession(ctx context.Context, runID string, jobID s
 	return nil
 }
 
-// StartS3UploadSession starts a S3 upload lineage session
-func (c *Client) StartS3UploadSession(ctx context.Context, sourceDir string, jobID string) (string, error) {
+// StartS3UploadSession starts a S3 upload lineage session with job
+func (c *Client) StartS3UploadSession(ctx context.Context, job JobProvider) (string, error) {
 	// Check if lineage is enabled
 	if !c.isEnabled() {
 		c.logger.Debug("Lineage is disabled, skipping S3 upload session start")
@@ -174,14 +192,18 @@ func (c *Client) StartS3UploadSession(ctx context.Context, sourceDir string, job
 	}
 
 	// Load metadata from source directory (reuse the same metadata from copy session)
-	if err := c.loadMetaData(sourceDir); err != nil {
-		c.logger.Errorw("Failed to load metadata from source directory", "error", err, "sourceDir", sourceDir)
+	if err := c.loadMetaData(job.GetSource()); err != nil {
+		c.logger.Errorw("Failed to load metadata from source directory", "error", err, "sourceDir", job.GetSource())
 		return "", fmt.Errorf("failed to load metadata: %w", err)
 	}
 
-	args := c.buildS3UploadArgs("start", jobID)
+	args := c.buildS3UploadArgs("start", job.GetID())
 
-	c.logger.Debugw("Starting S3 upload lineage session", "args", args)
+	inputDataset := c.extractS3UploadInputDataset(job)
+	args = append(args, "--input-dataset", inputDataset)
+
+	c.logger.Debugw("Starting S3 upload lineage session", "executable", c.config.Lineage.UploadExecutable, "args", args)
+	c.logger.Debugw("Full command", "command", fmt.Sprintf("%s %s", c.config.Lineage.UploadExecutable, strings.Join(args, " ")))
 
 	cmd := exec.CommandContext(ctx, c.config.Lineage.UploadExecutable, args...)
 	output, err := cmd.CombinedOutput()
@@ -195,7 +217,7 @@ func (c *Client) StartS3UploadSession(ctx context.Context, sourceDir string, job
 }
 
 // CompleteS3UploadSession completes a S3 upload lineage session
-func (c *Client) CompleteS3UploadSession(ctx context.Context, runID string, jobID string) error {
+func (c *Client) CompleteS3UploadSession(ctx context.Context, runID string, job JobProvider) error {
 	// Check if lineage is enabled
 	if !c.isEnabled() {
 		c.logger.Debug("Lineage is disabled, skipping S3 upload session complete")
@@ -213,10 +235,13 @@ func (c *Client) CompleteS3UploadSession(ctx context.Context, runID string, jobI
 		return nil
 	}
 
-	args := c.buildS3UploadArgs("complete", jobID)
+	args := c.buildS3UploadArgs("complete", job.GetID())
 	args = append(args, "--run-id", runID)
 
-	c.logger.Debugw("Completing S3 upload lineage session", "args", args)
+	outputDataset := c.extractS3UploadOutputDataset(job)
+	args = append(args, "--output-dataset", outputDataset)
+
+	c.logger.Debugw("Completing S3 upload lineage session", "executable", c.config.Lineage.UploadExecutable, "args", args)
 
 	cmd := exec.CommandContext(ctx, c.config.Lineage.UploadExecutable, args...)
 	output, err := cmd.CombinedOutput()
@@ -228,7 +253,7 @@ func (c *Client) CompleteS3UploadSession(ctx context.Context, runID string, jobI
 }
 
 // CancelS3UploadSession cancels a S3 upload lineage session
-func (c *Client) CancelS3UploadSession(ctx context.Context, runID string, jobID string) error {
+func (c *Client) CancelS3UploadSession(ctx context.Context, runID string, job JobProvider) error {
 	// Check if lineage is enabled
 	if !c.isEnabled() {
 		c.logger.Debug("Lineage is disabled, skipping S3 upload session cancel")
@@ -246,7 +271,7 @@ func (c *Client) CancelS3UploadSession(ctx context.Context, runID string, jobID 
 		return nil
 	}
 
-	args := c.buildS3UploadArgs("cancel", jobID)
+	args := c.buildS3UploadArgs("cancel", job.GetID())
 	args = append(args, "--run-id", runID)
 
 	c.logger.Debugw("Cancelling S3 upload lineage session", "args", args)
@@ -332,7 +357,7 @@ func (c *Client) buildS3UploadArgs(command string, jobID string) []string {
 	return args
 }
 
-// loadMetaData loads metadata from meta.json in the source directory
+// buildS3UploadArgs builds common arguments
 // Supports both v1.0 and v1.1+ metadata formats
 func (c *Client) loadMetaData(sourceDir string) error {
 	// Find meta.json file in the source directory
@@ -358,4 +383,155 @@ func (c *Client) loadMetaData(sourceDir string) error {
 		"source_dir", sourceDir)
 
 	return nil
+}
+
+// extractUsbCopyInputDataset extracts and reconstructs input dataset JSON from job metadata
+func (c *Client) extractUsbCopyInputDataset(job JobProvider) string {
+	if job == nil {
+		return ""
+	}
+
+	metadata := job.GetMetadata()
+	if metadata == nil {
+		return ""
+	}
+
+	// Parse src_files from metadata
+	var srcFiles []map[string]interface{}
+	if srcFilesJSON := metadata["src_files"]; srcFilesJSON != "" {
+		if err := json.Unmarshal([]byte(srcFilesJSON), &srcFiles); err != nil {
+			c.logger.Warnw("Failed to parse src_files JSON from metadata", "error", err, "srcFilesJSON", srcFilesJSON)
+			srcFiles = []map[string]interface{}{}
+		}
+	} else {
+		srcFiles = []map[string]interface{}{}
+	}
+
+	// Build USB device info
+	usbDevice := map[string]interface{}{}
+	if fsId := metadata["fs_id"]; fsId != "" {
+		usbDevice["id"] = fsId
+	}
+	if volumeName := metadata["volume_name"]; volumeName != "" {
+		usbDevice["label"] = volumeName
+	}
+	if fsType := metadata["fs_type"]; fsType != "" {
+		usbDevice["fs_type"] = fsType
+	}
+
+	// Reconstruct the dataset JSON from metadata
+	dataset := map[string]interface{}{
+		"dataset_name": job.GetSource(),
+		"src_dir":      map[string]interface{}{"path": job.GetSource()},
+		"usb_device":   usbDevice,
+		"src_files":    srcFiles,
+	}
+
+	// Convert back to JSON string
+	if jsonBytes, err := json.Marshal(dataset); err == nil {
+		jsonStr := string(jsonBytes)
+		return jsonStr
+	} else {
+		c.logger.Errorw("Failed to marshal dataset to JSON", "error", err, "dataset", dataset)
+	}
+
+	return ""
+}
+
+// extractUsbCopyOutputDataset extracts and reconstructs output dataset JSON from job metadata
+func (c *Client) extractUsbCopyOutputDataset(job JobProvider) string {
+	if job == nil {
+		return ""
+	}
+
+	metadata := job.GetMetadata()
+	if metadata == nil {
+		return ""
+	}
+
+	// Reconstruct the dataset JSON from metadata
+	dataset := map[string]interface{}{
+		"dataset_name":    job.GetDestination(),
+		"dest_dir":        map[string]interface{}{"path": job.GetDestination()},
+		"operation_stats": map[string]interface{}{"duration_seconds": (time.Since(job.GetCreatedAt())).Seconds()},
+	}
+
+	// Convert back to JSON string
+	if jsonBytes, err := json.Marshal(dataset); err == nil {
+		jsonStr := string(jsonBytes)
+		return jsonStr
+	} else {
+		c.logger.Errorw("Failed to marshal dataset to JSON", "error", err, "dataset", dataset)
+	}
+
+	return ""
+}
+
+// extractS3UploadInputDataset extracts and reconstructs input dataset JSON from job metadata
+func (c *Client) extractS3UploadInputDataset(job JobProvider) string {
+	if job == nil {
+		return ""
+	}
+
+	metadata := job.GetMetadata()
+	if metadata == nil {
+		return ""
+	}
+
+	// Parse src_files from metadata
+	var srcFiles []map[string]interface{}
+	if srcFilesJSON := metadata["src_files"]; srcFilesJSON != "" {
+		if err := json.Unmarshal([]byte(srcFilesJSON), &srcFiles); err != nil {
+			c.logger.Warnw("Failed to parse src_files JSON from metadata", "error", err, "srcFilesJSON", srcFilesJSON)
+			srcFiles = []map[string]interface{}{}
+		}
+	} else {
+		srcFiles = []map[string]interface{}{}
+	}
+
+	// Reconstruct the dataset JSON from metadata
+	dataset := map[string]interface{}{
+		"dataset_name": job.GetSource(),
+		"src_dir":      map[string]interface{}{"path": job.GetSource()},
+		"src_files":    srcFiles,
+	}
+
+	// Convert back to JSON string
+	if jsonBytes, err := json.Marshal(dataset); err == nil {
+		jsonStr := string(jsonBytes)
+		return jsonStr
+	} else {
+		c.logger.Errorw("Failed to marshal dataset to JSON", "error", err, "dataset", dataset)
+	}
+
+	return ""
+}
+
+// extractS3UploadOutputDataset extracts and reconstructs output dataset JSON from job metadata
+func (c *Client) extractS3UploadOutputDataset(job JobProvider) string {
+	if job == nil {
+		return ""
+	}
+
+	metadata := job.GetMetadata()
+	if metadata == nil {
+		return ""
+	}
+
+	// Reconstruct the dataset JSON from metadata
+	dataset := map[string]interface{}{
+		"dataset_name":    job.GetDestination(),
+		"dest_dir":        map[string]interface{}{"path": job.GetDestination()},
+		"operation_stats": map[string]interface{}{"duration_seconds": (time.Since(job.GetCreatedAt())).Seconds()},
+	}
+
+	// Convert back to JSON string
+	if jsonBytes, err := json.Marshal(dataset); err == nil {
+		jsonStr := string(jsonBytes)
+		return jsonStr
+	} else {
+		c.logger.Errorw("Failed to marshal dataset to JSON", "error", err, "dataset", dataset)
+	}
+
+	return ""
 }

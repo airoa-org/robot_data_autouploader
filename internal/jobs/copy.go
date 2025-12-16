@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -98,7 +99,7 @@ func (w *CopyWorker) processJob(job *Job) {
 	// Initialize lineage run ID variable for use throughout the function
 	var lineageRunID string
 
-	runID, err := w.lineageClient.StartUSBCopySession(w.ctx, job.Source, job.ID)
+	runID, err := w.lineageClient.StartUSBCopySession(w.ctx, job)
 	if err != nil {
 		w.logger.Errorw("Failed to start lineage session for copy job",
 			"jobID", job.ID,
@@ -146,7 +147,7 @@ func (w *CopyWorker) processJob(job *Job) {
 			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
 		}
 		if lineageRunID != "" {
-			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID, job.ID); cancelErr != nil {
+			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID, job); cancelErr != nil {
 				w.logger.Errorw("Failed to cancel lineage session after copy error",
 					"jobID", job.ID,
 					"lineageRunID", lineageRunID,
@@ -188,7 +189,7 @@ func (w *CopyWorker) processJob(job *Job) {
 			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
 		}
 		if lineageRunID != "" {
-			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID, job.ID); cancelErr != nil {
+			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID, job); cancelErr != nil {
 				w.logger.Errorw("Failed to cancel lineage session after copy error",
 					"jobID", job.ID,
 					"lineageRunID", lineageRunID,
@@ -214,7 +215,7 @@ func (w *CopyWorker) processJob(job *Job) {
 			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
 		}
 		if lineageRunID != "" {
-			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID, job.ID); cancelErr != nil {
+			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID, job); cancelErr != nil {
 				w.logger.Errorw("Failed to cancel lineage session after copy error",
 					"jobID", job.ID,
 					"lineageRunID", lineageRunID,
@@ -240,7 +241,7 @@ func (w *CopyWorker) processJob(job *Job) {
 			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
 		}
 		if lineageRunID != "" {
-			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID, job.ID); cancelErr != nil {
+			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID, job); cancelErr != nil {
 				w.logger.Errorw("Failed to cancel lineage session after copy error",
 					"jobID", job.ID,
 					"lineageRunID", lineageRunID,
@@ -262,7 +263,7 @@ func (w *CopyWorker) processJob(job *Job) {
 
 	// Complete lineage session on success
 	if lineageRunID != "" {
-		if completeErr := w.lineageClient.CompleteUSBCopySession(w.ctx, lineageRunID, job.ID); completeErr != nil {
+		if completeErr := w.lineageClient.CompleteUSBCopySession(w.ctx, lineageRunID, job); completeErr != nil {
 			w.logger.Errorw("Failed to complete lineage session after successful copy",
 				"jobID", job.ID,
 				"lineageRunID", lineageRunID,
@@ -576,6 +577,25 @@ func (w *CopyWorker) createUploadJob(copyJob *Job) {
 	}
 	if lineageRunID, ok := copyJob.Metadata["lineage_run_id"]; ok {
 		uploadJob.AddMetadata("parent_lineage_run_id", lineageRunID)
+	}
+
+	// Add file list and hashes to metadata
+	srcFiles, err := ScanDirectoryForFiles(uploadSourcePath, &FileScanOptions{
+		ExcludePatterns: w.config.Copy.ExcludePatterns,
+		Logger:          w.logger,
+	})
+	if err != nil {
+		w.logger.Warnw("Failed to scan directory for files", "source", uploadSourcePath, "error", err)
+		srcFiles = []FileInfo{} // Use empty list if scanning fails
+	}
+
+	// Convert srcFiles to JSON string for metadata
+	srcFilesJSON, err := json.Marshal(srcFiles)
+	if err != nil {
+		w.logger.Warnw("Failed to marshal src_files to JSON", "error", err)
+		uploadJob.AddMetadata("src_files", "[]") // Use empty array string if marshaling fails
+	} else {
+		uploadJob.AddMetadata("src_files", string(srcFilesJSON))
 	}
 
 	// Save the new upload job to the database

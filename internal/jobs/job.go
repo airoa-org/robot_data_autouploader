@@ -112,6 +112,36 @@ func (j *Job) AddMetadata(key, value string) {
 	j.Metadata[key] = value
 }
 
+// GetMetadata returns the job's metadata.
+// This implements the JobProvider interface for lineage integration.
+func (j *Job) GetMetadata() map[string]string {
+	return j.Metadata
+}
+
+// GetID returns the job's ID.
+// This implements the JobProvider interface for lineage integration.
+func (j *Job) GetID() string {
+	return j.ID
+}
+
+// GetSource returns the job's source path.
+// This implements the JobProvider interface for lineage integration.
+func (j *Job) GetSource() string {
+	return j.Source
+}
+
+// GetDestination returns the job's destination path.
+// This implements the JobProvider interface for lineage integration.
+func (j *Job) GetDestination() string {
+	return j.Destination
+}
+
+// GetCreatedAt returns the job's creation time.
+// This implements the JobProvider interface for lineage integration.
+func (j *Job) GetCreatedAt() time.Time {
+	return j.CreatedAt
+}
+
 // JobPersister defines an interface for saving and potentially retrieving jobs.
 // This helps to break import cycles between jobs and storage packages.
 type JobPersister interface {
