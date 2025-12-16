@@ -58,7 +58,7 @@ func (c *Client) validateConfig() error {
 }
 
 // StartUSBCopySession starts a USB copy lineage session
-func (c *Client) StartUSBCopySession(ctx context.Context, sourceDir string) (string, error) {
+func (c *Client) StartUSBCopySession(ctx context.Context, sourceDir string, jobID string) (string, error) {
 	// Check if lineage is enabled
 	if !c.isEnabled() {
 		c.logger.Debug("Lineage is disabled, skipping USB copy session start")
@@ -77,7 +77,7 @@ func (c *Client) StartUSBCopySession(ctx context.Context, sourceDir string) (str
 		return "", fmt.Errorf("failed to load metadata: %w", err)
 	}
 
-	args := c.buildUSBCopyArgs("start")
+	args := c.buildUSBCopyArgs("start", jobID)
 
 	c.logger.Debugw("Starting USB copy lineage session", "args", args)
 
@@ -93,7 +93,7 @@ func (c *Client) StartUSBCopySession(ctx context.Context, sourceDir string) (str
 }
 
 // CompleteUSBCopySession completes a USB copy lineage session
-func (c *Client) CompleteUSBCopySession(ctx context.Context, runID string) error {
+func (c *Client) CompleteUSBCopySession(ctx context.Context, runID string, jobID string) error {
 	// Check if lineage is enabled
 	if !c.isEnabled() {
 		c.logger.Debug("Lineage is disabled, skipping USB copy session complete")
@@ -111,7 +111,7 @@ func (c *Client) CompleteUSBCopySession(ctx context.Context, runID string) error
 		return nil
 	}
 
-	args := c.buildUSBCopyArgs("complete")
+	args := c.buildUSBCopyArgs("complete", jobID)
 	args = append(args, "--run-id", runID)
 
 	c.logger.Debugw("Completing USB copy lineage session", "args", args)
@@ -126,7 +126,7 @@ func (c *Client) CompleteUSBCopySession(ctx context.Context, runID string) error
 }
 
 // CancelUSBCopySession cancels a USB copy lineage session
-func (c *Client) CancelUSBCopySession(ctx context.Context, runID string) error {
+func (c *Client) CancelUSBCopySession(ctx context.Context, runID string, jobID string) error {
 	// Check if lineage is enabled
 	if !c.isEnabled() {
 		c.logger.Debug("Lineage is disabled, skipping USB copy session cancel")
@@ -144,7 +144,7 @@ func (c *Client) CancelUSBCopySession(ctx context.Context, runID string) error {
 		return nil
 	}
 
-	args := c.buildUSBCopyArgs("cancel")
+	args := c.buildUSBCopyArgs("cancel", jobID)
 	args = append(args, "--run-id", runID)
 
 	c.logger.Infow("Cancelling USB copy lineage session", "runID", runID)
@@ -160,7 +160,7 @@ func (c *Client) CancelUSBCopySession(ctx context.Context, runID string) error {
 }
 
 // StartS3UploadSession starts a S3 upload lineage session
-func (c *Client) StartS3UploadSession(ctx context.Context, sourceDir string) (string, error) {
+func (c *Client) StartS3UploadSession(ctx context.Context, sourceDir string, jobID string) (string, error) {
 	// Check if lineage is enabled
 	if !c.isEnabled() {
 		c.logger.Debug("Lineage is disabled, skipping S3 upload session start")
@@ -179,7 +179,7 @@ func (c *Client) StartS3UploadSession(ctx context.Context, sourceDir string) (st
 		return "", fmt.Errorf("failed to load metadata: %w", err)
 	}
 
-	args := c.buildS3UploadArgs("start")
+	args := c.buildS3UploadArgs("start", jobID)
 
 	c.logger.Debugw("Starting S3 upload lineage session", "args", args)
 
@@ -195,7 +195,7 @@ func (c *Client) StartS3UploadSession(ctx context.Context, sourceDir string) (st
 }
 
 // CompleteS3UploadSession completes a S3 upload lineage session
-func (c *Client) CompleteS3UploadSession(ctx context.Context, runID string) error {
+func (c *Client) CompleteS3UploadSession(ctx context.Context, runID string, jobID string) error {
 	// Check if lineage is enabled
 	if !c.isEnabled() {
 		c.logger.Debug("Lineage is disabled, skipping S3 upload session complete")
@@ -213,7 +213,7 @@ func (c *Client) CompleteS3UploadSession(ctx context.Context, runID string) erro
 		return nil
 	}
 
-	args := c.buildS3UploadArgs("complete")
+	args := c.buildS3UploadArgs("complete", jobID)
 	args = append(args, "--run-id", runID)
 
 	c.logger.Debugw("Completing S3 upload lineage session", "args", args)
@@ -228,7 +228,7 @@ func (c *Client) CompleteS3UploadSession(ctx context.Context, runID string) erro
 }
 
 // CancelS3UploadSession cancels a S3 upload lineage session
-func (c *Client) CancelS3UploadSession(ctx context.Context, runID string) error {
+func (c *Client) CancelS3UploadSession(ctx context.Context, runID string, jobID string) error {
 	// Check if lineage is enabled
 	if !c.isEnabled() {
 		c.logger.Debug("Lineage is disabled, skipping S3 upload session cancel")
@@ -246,7 +246,7 @@ func (c *Client) CancelS3UploadSession(ctx context.Context, runID string) error 
 		return nil
 	}
 
-	args := c.buildS3UploadArgs("cancel")
+	args := c.buildS3UploadArgs("cancel", jobID)
 	args = append(args, "--run-id", runID)
 
 	c.logger.Debugw("Cancelling S3 upload lineage session", "args", args)
@@ -271,7 +271,7 @@ func (c *Client) getHostname() string {
 }
 
 // buildUSBCopyArgs builds common arguments
-func (c *Client) buildUSBCopyArgs(command string) []string {
+func (c *Client) buildUSBCopyArgs(command string, jobID string) []string {
 	args := []string{command}
 
 	// Add common arguments
@@ -293,11 +293,16 @@ func (c *Client) buildUSBCopyArgs(command string) []string {
 	args = append(args, "--repository-tag", c.config.Lineage.RepositoryTag)
 	args = append(args, "--repository-branch", c.config.Lineage.RepositoryBranch)
 
+	// Add job ID if provided
+	if jobID != "" {
+		args = append(args, "--job-id", jobID)
+	}
+
 	return args
 }
 
 // buildS3UploadArgs builds common arguments
-func (c *Client) buildS3UploadArgs(command string) []string {
+func (c *Client) buildS3UploadArgs(command string, jobID string) []string {
 	args := []string{command}
 
 	// Add common arguments
@@ -318,6 +323,11 @@ func (c *Client) buildS3UploadArgs(command string) []string {
 	args = append(args, "--repository-uri", c.config.Lineage.RepositoryURI)
 	args = append(args, "--repository-tag", c.config.Lineage.RepositoryTag)
 	args = append(args, "--repository-branch", c.config.Lineage.RepositoryBranch)
+
+	// Add job ID if provided
+	if jobID != "" {
+		args = append(args, "--job-id", jobID)
+	}
 
 	return args
 }

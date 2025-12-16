@@ -98,7 +98,7 @@ func (w *CopyWorker) processJob(job *Job) {
 	// Initialize lineage run ID variable for use throughout the function
 	var lineageRunID string
 
-	runID, err := w.lineageClient.StartUSBCopySession(w.ctx, job.Source)
+	runID, err := w.lineageClient.StartUSBCopySession(w.ctx, job.Source, job.ID)
 	if err != nil {
 		w.logger.Errorw("Failed to start lineage session for copy job",
 			"jobID", job.ID,
@@ -146,7 +146,7 @@ func (w *CopyWorker) processJob(job *Job) {
 			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
 		}
 		if lineageRunID != "" {
-			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID); cancelErr != nil {
+			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID, job.ID); cancelErr != nil {
 				w.logger.Errorw("Failed to cancel lineage session after copy error",
 					"jobID", job.ID,
 					"lineageRunID", lineageRunID,
@@ -188,7 +188,7 @@ func (w *CopyWorker) processJob(job *Job) {
 			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
 		}
 		if lineageRunID != "" {
-			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID); cancelErr != nil {
+			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID, job.ID); cancelErr != nil {
 				w.logger.Errorw("Failed to cancel lineage session after copy error",
 					"jobID", job.ID,
 					"lineageRunID", lineageRunID,
@@ -214,7 +214,7 @@ func (w *CopyWorker) processJob(job *Job) {
 			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
 		}
 		if lineageRunID != "" {
-			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID); cancelErr != nil {
+			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID, job.ID); cancelErr != nil {
 				w.logger.Errorw("Failed to cancel lineage session after copy error",
 					"jobID", job.ID,
 					"lineageRunID", lineageRunID,
@@ -240,7 +240,7 @@ func (w *CopyWorker) processJob(job *Job) {
 			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
 		}
 		if lineageRunID != "" {
-			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID); cancelErr != nil {
+			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID, job.ID); cancelErr != nil {
 				w.logger.Errorw("Failed to cancel lineage session after copy error",
 					"jobID", job.ID,
 					"lineageRunID", lineageRunID,
@@ -262,7 +262,7 @@ func (w *CopyWorker) processJob(job *Job) {
 
 	// Complete lineage session on success
 	if lineageRunID != "" {
-		if completeErr := w.lineageClient.CompleteUSBCopySession(w.ctx, lineageRunID); completeErr != nil {
+		if completeErr := w.lineageClient.CompleteUSBCopySession(w.ctx, lineageRunID, job.ID); completeErr != nil {
 			w.logger.Errorw("Failed to complete lineage session after successful copy",
 				"jobID", job.ID,
 				"lineageRunID", lineageRunID,
