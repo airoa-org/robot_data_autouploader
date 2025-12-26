@@ -35,11 +35,8 @@ sudo apt install -y --no-install-recommends \
 
 Install `airoa-lineage`.
 
-You need to have access to the repository.  
-Use personal access token or other way.
-
 ```sh
-pip install git+https://<personal-access-token>@github.com/airoa-org/airoa-lineage
+pip install git+https://github.com/airoa-org/airoa-lineage
 ```
 
 Check if the command is available.
