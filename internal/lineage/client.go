@@ -13,19 +13,29 @@ import (
 	"go.uber.org/zap"
 )
 
+// DefaultCommandTimeout is the default timeout for lineage CLI commands
+const DefaultCommandTimeout = 30 * time.Second
+
 // Client manages interactions with airoa-lineage CLIs
 type Client struct {
-	config       *appconfig.Config
-	logger       *zap.SugaredLogger
-	robotID      string
-	locationName string
+	config         *appconfig.Config
+	logger         *zap.SugaredLogger
+	robotID        string
+	locationName   string
+	commandTimeout time.Duration
 }
 
 // NewClient creates a new lineage client
-func NewClient(config *appconfig.Config, logger *zap.SugaredLogger) *Client {
+// Optional timeout parameter: if not provided or <= 0, DefaultCommandTimeout (30s) is used
+func NewClient(config *appconfig.Config, logger *zap.SugaredLogger, timeout ...time.Duration) *Client {
+	t := DefaultCommandTimeout
+	if len(timeout) > 0 && timeout[0] > 0 {
+		t = timeout[0]
+	}
 	return &Client{
-		config: config,
-		logger: logger,
+		config:         config,
+		logger:         logger,
+		commandTimeout: t,
 	}
 }
 
@@ -93,11 +103,10 @@ func (c *Client) StartUSBCopySession(ctx context.Context, job JobProvider) (stri
 	inputDataset := c.extractUsbCopyInputDataset(job)
 	args = append(args, "--input-dataset", inputDataset)
 
-	c.logger.Debugw("Starting USB copy lineage session", "executable", c.config.Lineage.CopyExecutable, "args", args)
+	c.logger.Debugw("Starting USB copy lineage session", "executable", c.config.Lineage.CopyExecutable, "args", args, "timeout", c.commandTimeout)
 	c.logger.Debugw("Full command", "command", fmt.Sprintf("%s %s", c.config.Lineage.CopyExecutable, strings.Join(args, " ")))
 
-	cmd := exec.CommandContext(ctx, c.config.Lineage.CopyExecutable, args...)
-	output, err := cmd.CombinedOutput()
+	output, err := c.execCommandWithTimeout(ctx, c.config.Lineage.CopyExecutable, args)
 	if err != nil {
 		return "", fmt.Errorf("failed to start USB copy lineage session: %w, output: %s", err, string(output))
 	}
@@ -132,10 +141,9 @@ func (c *Client) CompleteUSBCopySession(ctx context.Context, runID string, job J
 	outputDataset := c.extractUsbCopyOutputDataset(job)
 	args = append(args, "--output-dataset", outputDataset)
 
-	c.logger.Debugw("Completing USB copy lineage session", "executable", c.config.Lineage.CopyExecutable, "args", args)
+	c.logger.Debugw("Completing USB copy lineage session", "executable", c.config.Lineage.CopyExecutable, "args", args, "timeout", c.commandTimeout)
 
-	cmd := exec.CommandContext(ctx, c.config.Lineage.CopyExecutable, args...)
-	output, err := cmd.CombinedOutput()
+	output, err := c.execCommandWithTimeout(ctx, c.config.Lineage.CopyExecutable, args)
 	if err != nil {
 		return fmt.Errorf("failed to complete USB copy lineage session: %w, output: %s", err, string(output))
 	}
@@ -165,10 +173,9 @@ func (c *Client) CancelUSBCopySession(ctx context.Context, runID string, job Job
 	args := c.buildUSBCopyArgs("cancel", job.GetID())
 	args = append(args, "--run-id", runID)
 
-	c.logger.Infow("Cancelling USB copy lineage session", "runID", runID)
+	c.logger.Infow("Cancelling USB copy lineage session", "runID", runID, "timeout", c.commandTimeout)
 
-	cmd := exec.CommandContext(ctx, c.config.Lineage.CopyExecutable, args...)
-	output, err := cmd.CombinedOutput()
+	output, err := c.execCommandWithTimeout(ctx, c.config.Lineage.CopyExecutable, args)
 	if err != nil {
 		return fmt.Errorf("failed to cancel USB copy lineage session: %w, output: %s", err, string(output))
 	}
@@ -202,11 +209,10 @@ func (c *Client) StartS3UploadSession(ctx context.Context, job JobProvider) (str
 	inputDataset := c.extractS3UploadInputDataset(job)
 	args = append(args, "--input-dataset", inputDataset)
 
-	c.logger.Debugw("Starting S3 upload lineage session", "executable", c.config.Lineage.UploadExecutable, "args", args)
+	c.logger.Debugw("Starting S3 upload lineage session", "executable", c.config.Lineage.UploadExecutable, "args", args, "timeout", c.commandTimeout)
 	c.logger.Debugw("Full command", "command", fmt.Sprintf("%s %s", c.config.Lineage.UploadExecutable, strings.Join(args, " ")))
 
-	cmd := exec.CommandContext(ctx, c.config.Lineage.UploadExecutable, args...)
-	output, err := cmd.CombinedOutput()
+	output, err := c.execCommandWithTimeout(ctx, c.config.Lineage.UploadExecutable, args)
 	if err != nil {
 		return "", fmt.Errorf("failed to start S3 upload lineage session: %w, output: %s", err, string(output))
 	}
@@ -241,10 +247,9 @@ func (c *Client) CompleteS3UploadSession(ctx context.Context, runID string, job 
 	outputDataset := c.extractS3UploadOutputDataset(job)
 	args = append(args, "--output-dataset", outputDataset)
 
-	c.logger.Debugw("Completing S3 upload lineage session", "executable", c.config.Lineage.UploadExecutable, "args", args)
+	c.logger.Debugw("Completing S3 upload lineage session", "executable", c.config.Lineage.UploadExecutable, "args", args, "timeout", c.commandTimeout)
 
-	cmd := exec.CommandContext(ctx, c.config.Lineage.UploadExecutable, args...)
-	output, err := cmd.CombinedOutput()
+	output, err := c.execCommandWithTimeout(ctx, c.config.Lineage.UploadExecutable, args)
 	if err != nil {
 		return fmt.Errorf("failed to complete S3 upload lineage session: %w, output: %s", err, string(output))
 	}
@@ -274,10 +279,9 @@ func (c *Client) CancelS3UploadSession(ctx context.Context, runID string, job Jo
 	args := c.buildS3UploadArgs("cancel", job.GetID())
 	args = append(args, "--run-id", runID)
 
-	c.logger.Debugw("Cancelling S3 upload lineage session", "args", args)
+	c.logger.Debugw("Cancelling S3 upload lineage session", "args", args, "timeout", c.commandTimeout)
 
-	cmd := exec.CommandContext(ctx, c.config.Lineage.UploadExecutable, args...)
-	output, err := cmd.CombinedOutput()
+	output, err := c.execCommandWithTimeout(ctx, c.config.Lineage.UploadExecutable, args)
 	if err != nil {
 		return fmt.Errorf("failed to cancel S3 upload lineage session: %w, output: %s", err, string(output))
 	}
@@ -293,6 +297,21 @@ func (c *Client) getHostname() string {
 		return "unknown"
 	}
 	return hostname
+}
+
+// execCommandWithTimeout executes a command with the configured timeout
+func (c *Client) execCommandWithTimeout(ctx context.Context, executable string, args []string) ([]byte, error) {
+	timeoutCtx, cancel := context.WithTimeout(ctx, c.commandTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(timeoutCtx, executable, args...)
+	output, err := cmd.CombinedOutput()
+
+	if timeoutCtx.Err() == context.DeadlineExceeded {
+		return output, fmt.Errorf("command timed out after %v", c.commandTimeout)
+	}
+
+	return output, err
 }
 
 // buildUSBCopyArgs builds common arguments
