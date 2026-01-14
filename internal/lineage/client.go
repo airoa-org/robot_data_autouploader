@@ -20,8 +20,6 @@ const DefaultCommandTimeout = 30 * time.Second
 type Client struct {
 	config         *appconfig.Config
 	logger         *zap.SugaredLogger
-	robotID        string
-	locationName   string
 	commandTimeout time.Duration
 }
 
@@ -93,12 +91,13 @@ func (c *Client) StartUSBCopySession(ctx context.Context, job JobProvider) (stri
 	}
 
 	// Load metadata from source directory
-	if err := c.loadMetaData(job.GetSource()); err != nil {
+	metadata, err := c.loadMetaData(job.GetSource())
+	if err != nil {
 		c.logger.Errorw("Failed to load metadata from source directory", "error", err, "sourceDir", job.GetSource())
 		return "", fmt.Errorf("failed to load metadata: %w", err)
 	}
 
-	args := c.buildUSBCopyArgs("start", job.GetID())
+	args := c.buildUSBCopyArgs("start", job.GetID(), metadata.RobotID, metadata.Location)
 
 	inputDataset := c.extractUsbCopyInputDataset(job)
 	args = append(args, "--input-dataset", inputDataset)
@@ -135,7 +134,14 @@ func (c *Client) CompleteUSBCopySession(ctx context.Context, runID string, job J
 		return nil
 	}
 
-	args := c.buildUSBCopyArgs("complete", job.GetID())
+	// Load metadata from source directory
+	metadata, err := c.loadMetaData(job.GetSource())
+	if err != nil {
+		c.logger.Errorw("Failed to load metadata from source directory", "error", err, "sourceDir", job.GetSource())
+		return fmt.Errorf("failed to load metadata: %w", err)
+	}
+
+	args := c.buildUSBCopyArgs("complete", job.GetID(), metadata.RobotID, metadata.Location)
 	args = append(args, "--run-id", runID)
 
 	outputDataset := c.extractUsbCopyOutputDataset(job)
@@ -170,7 +176,14 @@ func (c *Client) CancelUSBCopySession(ctx context.Context, runID string, job Job
 		return nil
 	}
 
-	args := c.buildUSBCopyArgs("cancel", job.GetID())
+	// Load metadata from source directory
+	metadata, err := c.loadMetaData(job.GetSource())
+	if err != nil {
+		c.logger.Errorw("Failed to load metadata from source directory", "error", err, "sourceDir", job.GetSource())
+		return fmt.Errorf("failed to load metadata: %w", err)
+	}
+
+	args := c.buildUSBCopyArgs("cancel", job.GetID(), metadata.RobotID, metadata.Location)
 	args = append(args, "--run-id", runID)
 
 	c.logger.Infow("Cancelling USB copy lineage session", "runID", runID, "timeout", c.commandTimeout)
@@ -198,13 +211,14 @@ func (c *Client) StartS3UploadSession(ctx context.Context, job JobProvider) (str
 		return "", err
 	}
 
-	// Load metadata from source directory (reuse the same metadata from copy session)
-	if err := c.loadMetaData(job.GetSource()); err != nil {
+	// Load metadata from source directory
+	metadata, err := c.loadMetaData(job.GetSource())
+	if err != nil {
 		c.logger.Errorw("Failed to load metadata from source directory", "error", err, "sourceDir", job.GetSource())
 		return "", fmt.Errorf("failed to load metadata: %w", err)
 	}
 
-	args := c.buildS3UploadArgs("start", job.GetID())
+	args := c.buildS3UploadArgs("start", job.GetID(), metadata.RobotID, metadata.Location)
 
 	inputDataset := c.extractS3UploadInputDataset(job)
 	args = append(args, "--input-dataset", inputDataset)
@@ -241,7 +255,14 @@ func (c *Client) CompleteS3UploadSession(ctx context.Context, runID string, job 
 		return nil
 	}
 
-	args := c.buildS3UploadArgs("complete", job.GetID())
+	// Load metadata from source directory
+	metadata, err := c.loadMetaData(job.GetSource())
+	if err != nil {
+		c.logger.Errorw("Failed to load metadata from source directory", "error", err, "sourceDir", job.GetSource())
+		return fmt.Errorf("failed to load metadata: %w", err)
+	}
+
+	args := c.buildS3UploadArgs("complete", job.GetID(), metadata.RobotID, metadata.Location)
 	args = append(args, "--run-id", runID)
 
 	outputDataset := c.extractS3UploadOutputDataset(job)
@@ -276,7 +297,14 @@ func (c *Client) CancelS3UploadSession(ctx context.Context, runID string, job Jo
 		return nil
 	}
 
-	args := c.buildS3UploadArgs("cancel", job.GetID())
+	// Load metadata from source directory
+	metadata, err := c.loadMetaData(job.GetSource())
+	if err != nil {
+		c.logger.Errorw("Failed to load metadata from source directory", "error", err, "sourceDir", job.GetSource())
+		return fmt.Errorf("failed to load metadata: %w", err)
+	}
+
+	args := c.buildS3UploadArgs("cancel", job.GetID(), metadata.RobotID, metadata.Location)
 	args = append(args, "--run-id", runID)
 
 	c.logger.Debugw("Cancelling S3 upload lineage session", "args", args, "timeout", c.commandTimeout)
@@ -315,14 +343,14 @@ func (c *Client) execCommandWithTimeout(ctx context.Context, executable string, 
 }
 
 // buildUSBCopyArgs builds common arguments
-func (c *Client) buildUSBCopyArgs(command string, jobID string) []string {
+func (c *Client) buildUSBCopyArgs(command string, jobID string, robotID string, locationName string) []string {
 	args := []string{command}
 
 	// Add common arguments
 	args = append(args, "--namespace", c.config.Lineage.Namespace)
 	args = append(args, "--job-name", "usb-data-copy")
-	args = append(args, "--robot-id", c.robotID)
-	args = append(args, "--location", c.locationName)
+	args = append(args, "--robot-id", robotID)
+	args = append(args, "--location", locationName)
 	args = append(args, "--hostname", c.getHostname())
 	if c.config.Lineage.MarquezURL != "" {
 		args = append(args, "--marquez-url", c.config.Lineage.MarquezURL)
@@ -346,14 +374,14 @@ func (c *Client) buildUSBCopyArgs(command string, jobID string) []string {
 }
 
 // buildS3UploadArgs builds common arguments
-func (c *Client) buildS3UploadArgs(command string, jobID string) []string {
+func (c *Client) buildS3UploadArgs(command string, jobID string, robotID string, locationName string) []string {
 	args := []string{command}
 
 	// Add common arguments
 	args = append(args, "--namespace", c.config.Lineage.Namespace)
 	args = append(args, "--job-name", "s3-data-upload")
-	args = append(args, "--robot-id", c.robotID)
-	args = append(args, "--location", c.locationName)
+	args = append(args, "--robot-id", robotID)
+	args = append(args, "--location", locationName)
 	args = append(args, "--hostname", c.getHostname())
 	if c.config.Lineage.MarquezURL != "" {
 		args = append(args, "--marquez-url", c.config.Lineage.MarquezURL)
@@ -376,32 +404,29 @@ func (c *Client) buildS3UploadArgs(command string, jobID string) []string {
 	return args
 }
 
-// buildS3UploadArgs builds common arguments
-// Supports both v1.0 and v1.1+ metadata formats
-func (c *Client) loadMetaData(sourceDir string) error {
+// loadMetaData loads metadata from the source directory and returns the parsed MetadataInfo.
+// This method does not store any state in the Client to ensure thread safety.
+// Supports both v1.0 and v1.1+ metadata formats.
+func (c *Client) loadMetaData(sourceDir string) (*MetadataInfo, error) {
 	// Find meta.json file in the source directory
 	metaPath, err := FindMetadataFile(sourceDir)
 	if err != nil {
-		return fmt.Errorf("failed to find metadata file: %w", err)
+		return nil, fmt.Errorf("failed to find metadata file: %w", err)
 	}
 
 	// Read and parse metadata using the existing function
 	metadataInfo, err := ReadMetadata(metaPath)
 	if err != nil {
-		return fmt.Errorf("failed to read metadata: %w", err)
+		return nil, fmt.Errorf("failed to read metadata: %w", err)
 	}
 
-	// Set values from parsed metadata
-	c.robotID = metadataInfo.RobotID
-	c.locationName = metadataInfo.Location
-
 	c.logger.Infow("Loaded metadata from meta.json",
-		"robot_id", c.robotID,
-		"location_name", c.locationName,
+		"robot_id", metadataInfo.RobotID,
+		"location_name", metadataInfo.Location,
 		"version", metadataInfo.Version,
 		"source_dir", sourceDir)
 
-	return nil
+	return metadataInfo, nil
 }
 
 // extractUsbCopyInputDataset extracts and reconstructs input dataset JSON from job metadata
