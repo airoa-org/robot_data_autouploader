@@ -75,21 +75,21 @@ func TestCopyWorkerJobResumption(t *testing.T) {
 	uploadQueue := jobs.NewQueue("upload", 3, logger.Sugar())
 
 	// === PHASE 1: Simulate partial completion (first worker processes some files then "crashes") ===
-	
+
 	// Manually copy the first 2 files and mark them as completed in the database
 	// This simulates what would happen if a worker crashed after processing 2 files
-	
+
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		t.Fatalf("Failed to create dest dir: %v", err)
 	}
 
 	expectedCompleted := []string{"file1.txt", "file2.txt"}
-	
+
 	// Manually copy and track the first 2 files
 	for _, fileName := range expectedCompleted {
 		srcFile := filepath.Join(sourceDir, fileName)
 		destFile := filepath.Join(destDir, fileName)
-		
+
 		// Copy the file
 		content, err := os.ReadFile(srcFile)
 		if err != nil {
@@ -98,7 +98,7 @@ func TestCopyWorkerJobResumption(t *testing.T) {
 		if err := os.WriteFile(destFile, content, 0644); err != nil {
 			t.Fatalf("Failed to write dest file %s: %v", fileName, err)
 		}
-		
+
 		// Mark as completed in database
 		now := time.Now()
 		jobFile := &jobs.JobFile{
@@ -145,7 +145,7 @@ func TestCopyWorkerJobResumption(t *testing.T) {
 	// Start the worker first
 	go worker2.Start()
 	defer worker2.Stop()
-	
+
 	// Now enqueue the job for the worker to process
 	if err := copyQueue.Enqueue(job); err != nil {
 		t.Fatalf("Failed to enqueue job for second worker: %v", err)
@@ -228,7 +228,7 @@ func countFilesInDir(t *testing.T, dir string) int {
 		}
 		t.Fatalf("Failed to read directory %s: %v", dir, err)
 	}
-	
+
 	count := 0
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -312,9 +312,9 @@ func TestUploadWorkerJobResumption(t *testing.T) {
 	uploadQueue := jobs.NewQueue("upload", 3, logger.Sugar())
 
 	// === PHASE 1: Simulate partial completion (first worker uploads some files then "crashes") ===
-	
+
 	expectedCompleted := []string{"doc1.pdf", "doc2.pdf"}
-	
+
 	// Manually mark the first 2 files as uploaded in the database
 	for _, fileName := range expectedCompleted {
 		srcFile := filepath.Join(sourceDir, fileName)
@@ -322,7 +322,7 @@ func TestUploadWorkerJobResumption(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to read source file %s: %v", fileName, err)
 		}
-		
+
 		// Mark as completed in database
 		now := time.Now()
 		jobFile := &jobs.JobFile{
@@ -359,15 +359,15 @@ func TestUploadWorkerJobResumption(t *testing.T) {
 
 	// Create upload worker
 	worker := jobs.NewUploadWorker(uploadQueue, config, db, logger.Sugar())
-	
+
 	// We can't easily mock S3 uploads in this integration test,
 	// so we'll verify the file tracking behavior by checking the logs
 	// and ensuring the worker processes only the remaining files
-	
+
 	// Start the worker
 	go worker.Start()
 	defer worker.Stop()
-	
+
 	// Enqueue the job
 	if err := uploadQueue.Enqueue(job); err != nil {
 		t.Fatalf("Failed to enqueue job for upload worker: %v", err)

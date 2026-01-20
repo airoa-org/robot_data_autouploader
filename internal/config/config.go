@@ -3,12 +3,27 @@ package config
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
+)
+
+// Build-time variables set by ldflags
+var (
+	// BuildGitHash is the git commit hash at build time
+	BuildGitHash string
+	// BuildGitBranch is the git branch at build time
+	BuildGitBranch string
+	// BuildGitTag is the git tag at build time
+	BuildGitTag string
+	// BuildGitRemote is the git remote URL at build time
+	BuildGitRemote string
+	// BuildTime is the build timestamp
+	BuildTime string
 )
 
 // Config represents the application configuration
@@ -19,6 +34,7 @@ type Config struct {
 	Jobs    JobsConfig    `mapstructure:"jobs"`
 	Copy    CopyConfig    `mapstructure:"copy"`
 	Upload  UploadConfig  `mapstructure:"upload"`
+	Lineage LineageConfig `mapstructure:"lineage"`
 }
 
 // DaemonConfig contains settings for the daemon service
@@ -66,8 +82,9 @@ type JobsConfig struct {
 
 // CopyConfig contains file copy settings
 type CopyConfig struct {
-	ExcludePatterns   []string `mapstructure:"exclude_patterns"`
-	MinFreeSpaceRatio float64  `mapstructure:"min_free_space_ratio"` // Minimum ratio of free space to keep after copy (e.g. 0.1 for 10%)
+	ExcludePatterns          []string `mapstructure:"exclude_patterns"`
+	ExcludeDirectoryPatterns []string `mapstructure:"exclude_directory_patterns"`
+	MinFreeSpaceRatio        float64  `mapstructure:"min_free_space_ratio"` // Minimum ratio of free space to keep after copy (e.g. 0.1 for 10%)
 }
 
 // UploadConfig contains S3 upload settings
@@ -76,6 +93,20 @@ type UploadConfig struct {
 	ChunkSizeMb     int      `mapstructure:"chunk_size_mb"`
 	ThrottleMbps    int      `mapstructure:"throttle_mbps"`
 	AllowedPatterns []string `mapstructure:"allowed_patterns"` // Only upload files matching these patterns (empty = allow all)
+}
+
+// LineageConfig contains airoa-lineage tracking settings
+type LineageConfig struct {
+	Enabled          bool   `mapstructure:"enabled"`
+	CopyExecutable   string `mapstructure:"copy_executable"`
+	UploadExecutable string `mapstructure:"upload_executable"`
+	Namespace        string `mapstructure:"namespace"`
+	MarquezURL       string `mapstructure:"marquez_url"`
+	FacetPrefix      string `mapstructure:"facet_prefix"`
+	RepositoryHash   string `mapstructure:"repository_hash"`
+	RepositoryURI    string `mapstructure:"repository_uri"`
+	RepositoryTag    string `mapstructure:"repository_tag"`
+	RepositoryBranch string `mapstructure:"repository_branch"`
 }
 
 // LoadConfig loads the configuration from the specified file
@@ -127,6 +158,9 @@ func LoadConfig(configPath string) (*Config, error) {
 
 	// Expand environment variables and home directory in paths
 	expandPaths(&config)
+
+	// Fill in git information if not provided and git is available
+	fillGitInfo(&config)
 
 	return &config, nil
 }
@@ -242,6 +276,7 @@ func setDefaultValues(v *viper.Viper) {
 
 	// Copy defaults
 	v.SetDefault("copy.exclude_patterns", []string{"*.tmp", "*.DS_Store"})
+	v.SetDefault("copy.exclude_directory_patterns", []string{"System Volume Information"})
 	v.SetDefault("copy.min_free_space_ratio", 0.05) // Default: keep at least 5% free space
 
 	// Upload defaults
@@ -249,4 +284,121 @@ func setDefaultValues(v *viper.Viper) {
 	v.SetDefault("upload.throttle_mbps", 50)
 	v.SetDefault("upload.chunk_size_mb", 8)
 	v.SetDefault("upload.allowed_patterns", []string{"data.bag", "meta.json"}) // Empty = allow all files
+
+	// Lineage defaults
+	v.SetDefault("lineage.enabled", false)
+	v.SetDefault("lineage.namespace", "airoa")
+	v.SetDefault("lineage.copy_executable", "airoa-lineage-usb-copy")
+	v.SetDefault("lineage.upload_executable", "airoa-lineage-s3-upload")
+	v.SetDefault("lineage.facet_prefix", "airoa")
+	v.SetDefault("lineage.repository_hash", "")
+	v.SetDefault("lineage.repository_uri", "")
+	v.SetDefault("lineage.repository_tag", "")
+	v.SetDefault("lineage.repository_branch", "")
+}
+
+// fillGitInfo fills in git repository information if not provided
+// Prioritizes build-time embedded values over runtime git commands
+func fillGitInfo(config *Config) {
+	// Fill in repository hash if empty
+	if config.Lineage.RepositoryHash == "" {
+		// First try build-time embedded value
+		if BuildGitHash != "" {
+			config.Lineage.RepositoryHash = BuildGitHash
+		} else if hash := getGitHash(); hash != "" {
+			// Fallback to runtime git command
+			config.Lineage.RepositoryHash = hash
+		}
+	}
+
+	// Fill in repository URI if empty
+	if config.Lineage.RepositoryURI == "" {
+		// First try build-time embedded value
+		if BuildGitRemote != "" {
+			config.Lineage.RepositoryURI = BuildGitRemote
+		} else if uri := getGitRemoteURI(); uri != "" {
+			// Fallback to runtime git command
+			config.Lineage.RepositoryURI = uri
+		}
+	}
+
+	// Fill in repository branch if empty
+	if config.Lineage.RepositoryBranch == "" {
+		// First try build-time embedded value
+		if BuildGitBranch != "" {
+			config.Lineage.RepositoryBranch = BuildGitBranch
+		} else if branch := getGitBranch(); branch != "" {
+			// Fallback to runtime git command
+			config.Lineage.RepositoryBranch = branch
+		}
+	}
+
+	// Fill in repository tag if empty and available
+	if config.Lineage.RepositoryTag == "" && BuildGitTag != "" {
+		config.Lineage.RepositoryTag = BuildGitTag
+	} else {
+		config.Lineage.RepositoryTag = "no-tag"
+	}
+}
+
+// getGitHash returns the current git commit hash
+func getGitHash() string {
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
+}
+
+// getGitRemoteURI returns the git remote URI
+func getGitRemoteURI() string {
+	cmd := exec.Command("git", "remote", "get-url", "origin")
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
+}
+
+// getGitBranch returns the current git branch
+func getGitBranch() string {
+	cmd := exec.Command("git", "branch", "--show-current")
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
+}
+
+// GetBuildInfo returns build information
+func GetBuildInfo() map[string]string {
+	info := map[string]string{
+		"git_hash":   BuildGitHash,
+		"git_branch": BuildGitBranch,
+		"git_tag":    BuildGitTag,
+		"git_remote": BuildGitRemote,
+		"build_time": BuildTime,
+	}
+
+	// Fill empty values with "unknown"
+	for key, value := range info {
+		if value == "" {
+			info[key] = "unknown"
+		}
+	}
+
+	return info
+}
+
+// GetVersionString returns a formatted version string
+func GetVersionString() string {
+	info := GetBuildInfo()
+	if info["git_tag"] != "unknown" && info["git_tag"] != "" {
+		return info["git_tag"]
+	}
+	if info["git_hash"] != "unknown" && len(info["git_hash"]) >= 7 {
+		return info["git_hash"][:7]
+	}
+	return "dev"
 }

@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,32 +13,35 @@ import (
 	"time"
 
 	appconfig "github.com/airoa-org/robot_data_pipeline/autoloader/internal/config"
+	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/lineage"
 	"go.uber.org/zap"
 )
 
 // CopyWorker handles file copy jobs
 type CopyWorker struct {
-	queue       *Queue
-	uploadQueue *Queue
-	config      *appconfig.Config
-	logger      *zap.SugaredLogger
-	persister   JobPersister
-	ctx         context.Context
-	cancelFunc  context.CancelFunc
+	queue         *Queue
+	uploadQueue   *Queue
+	config        *appconfig.Config
+	logger        *zap.SugaredLogger
+	persister     JobPersister
+	lineageClient *lineage.Client
+	ctx           context.Context
+	cancelFunc    context.CancelFunc
 }
 
 // NewCopyWorker creates a new copy worker
-func NewCopyWorker(queue *Queue, uploadQueue *Queue, cfg *appconfig.Config, persister JobPersister, logger *zap.SugaredLogger) *CopyWorker { // Changed db to persister
+func NewCopyWorker(queue *Queue, uploadQueue *Queue, cfg *appconfig.Config, persister JobPersister, logger *zap.SugaredLogger, lineageClient *lineage.Client) *CopyWorker {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &CopyWorker{
-		queue:       queue,
-		uploadQueue: uploadQueue,
-		config:      cfg,
-		logger:      logger,
-		persister:   persister, // Initialize persister field
-		ctx:         ctx,
-		cancelFunc:  cancel,
+		queue:         queue,
+		uploadQueue:   uploadQueue,
+		config:        cfg,
+		logger:        logger,
+		persister:     persister,
+		lineageClient: lineageClient,
+		ctx:           ctx,
+		cancelFunc:    cancel,
 	}
 }
 
@@ -92,6 +96,23 @@ func (w *CopyWorker) processJob(job *Job) {
 		"source", job.Source,
 		"destination", job.Destination)
 
+	// Initialize lineage run ID variable for use throughout the function
+	var lineageRunID string
+
+	runID, err := w.lineageClient.StartUSBCopySession(w.ctx, job)
+	if err != nil {
+		w.logger.Errorw("Failed to start lineage session for copy job",
+			"jobID", job.ID,
+			"error", err)
+		// Continue without lineage tracking
+	} else {
+		lineageRunID = runID
+		job.AddMetadata("lineage_run_id", lineageRunID)
+		w.logger.Infow("Started lineage session for copy job",
+			"jobID", job.ID,
+			"lineageRunID", lineageRunID)
+	}
+
 	// Update job status
 	job.UpdateStatus(JobStatusInProgress)
 	if errDb := w.persister.SaveJob(job); errDb != nil { // Use persister
@@ -124,6 +145,14 @@ func (w *CopyWorker) processJob(job *Job) {
 		job.SetError(fmt.Errorf("failed to check disk space: %w", spaceErr))
 		if errDb := w.persister.SaveJob(job); errDb != nil {
 			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
+		}
+		if lineageRunID != "" {
+			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID, job); cancelErr != nil {
+				w.logger.Errorw("Failed to cancel lineage session after copy error",
+					"jobID", job.ID,
+					"lineageRunID", lineageRunID,
+					"error", cancelErr)
+			}
 		}
 		return
 	}
@@ -159,6 +188,14 @@ func (w *CopyWorker) processJob(job *Job) {
 		if errDb := w.persister.SaveJob(job); errDb != nil {
 			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
 		}
+		if lineageRunID != "" {
+			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID, job); cancelErr != nil {
+				w.logger.Errorw("Failed to cancel lineage session after copy error",
+					"jobID", job.ID,
+					"lineageRunID", lineageRunID,
+					"error", cancelErr)
+			}
+		}
 		return
 	}
 
@@ -176,6 +213,14 @@ func (w *CopyWorker) processJob(job *Job) {
 		job.SetError(fmt.Errorf("failed to create destination directory: %w", err))
 		if errDb := w.persister.SaveJob(job); errDb != nil { // Use persister
 			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
+		}
+		if lineageRunID != "" {
+			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID, job); cancelErr != nil {
+				w.logger.Errorw("Failed to cancel lineage session after copy error",
+					"jobID", job.ID,
+					"lineageRunID", lineageRunID,
+					"error", cancelErr)
+			}
 		}
 		return
 	}
@@ -195,6 +240,14 @@ func (w *CopyWorker) processJob(job *Job) {
 		if errDb := w.persister.SaveJob(job); errDb != nil { // Use persister
 			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
 		}
+		if lineageRunID != "" {
+			if cancelErr := w.lineageClient.CancelUSBCopySession(w.ctx, lineageRunID, job); cancelErr != nil {
+				w.logger.Errorw("Failed to cancel lineage session after copy error",
+					"jobID", job.ID,
+					"lineageRunID", lineageRunID,
+					"error", cancelErr)
+			}
+		}
 		return
 	}
 
@@ -208,12 +261,27 @@ func (w *CopyWorker) processJob(job *Job) {
 
 	w.logger.Infow("Copy job completed successfully to staging area", "jobID", job.ID, "source", job.Source, "destination", job.Destination)
 
+	// Complete lineage session on success
+	if lineageRunID != "" {
+		if completeErr := w.lineageClient.CompleteUSBCopySession(w.ctx, lineageRunID, job); completeErr != nil {
+			w.logger.Errorw("Failed to complete lineage session after successful copy",
+				"jobID", job.ID,
+				"lineageRunID", lineageRunID,
+				"error", completeErr)
+			// Don't fail the job, just log the error
+		} else {
+			w.logger.Infow("Completed lineage session for copy job",
+				"jobID", job.ID,
+				"lineageRunID", lineageRunID)
+		}
+	}
+
 	if w.config.Storage.Local.RetentionPolicyOnCopy == "delete" {
 		// Delete the original files/directory from the USB source after successful copy
 		w.logger.Infow("Attempting to delete original data from USB source after successful copy",
 			"jobID", job.ID,
 			"usb_source_path", job.Source)
-		
+
 		result, err := RemoveAllBestEffort(job.Source, w.logger)
 		if err != nil {
 			w.logger.Errorw("Error during deletion attempt",
@@ -221,7 +289,7 @@ func (w *CopyWorker) processJob(job *Job) {
 				"usb_source_path", job.Source,
 				"error", err)
 		}
-		
+
 		// Determine overall success/failure
 		if result.TotalFiles == result.DeletedFiles && result.TotalDirs == result.DeletedDirs {
 			w.logger.Infow("Successfully deleted all original data from USB source after copy",
@@ -239,7 +307,7 @@ func (w *CopyWorker) processJob(job *Job) {
 				"totalDirs", result.TotalDirs,
 				"failedFiles", len(result.FailedFiles),
 				"failedDirs", len(result.FailedDirs))
-			
+
 			// Log details about what couldn't be deleted
 			if len(result.FailedFiles) > 0 {
 				w.logger.Debugw("Files that could not be deleted from USB",
@@ -319,7 +387,7 @@ func (w *CopyWorker) copyDirectory(job *Job) error {
 		w.logger.Warnw("Failed to get completed files, will process all files", "jobID", job.ID, "error", err)
 	} else if len(completedFiles) > 0 {
 		w.logger.Infow("Found completed files from previous run", "jobID", job.ID, "count", len(completedFiles))
-		
+
 		// Create a map of completed files for fast lookup
 		completedMap := make(map[string]bool)
 		var completedSize int64
@@ -327,7 +395,7 @@ func (w *CopyWorker) copyDirectory(job *Job) error {
 			completedMap[cf.FilePath] = true
 			completedSize += cf.Size
 		}
-		
+
 		// Update processed size to reflect already completed files
 		job.ProcessedSize = completedSize
 		if job.TotalSize > 0 {
@@ -336,7 +404,7 @@ func (w *CopyWorker) copyDirectory(job *Job) error {
 		if errDb := w.persister.SaveJob(job); errDb != nil {
 			w.logger.Warnw("Failed to update job progress after checking completed files", "jobID", job.ID, "error", errDb)
 		}
-		
+
 		// Filter out already completed files
 		var pendingFiles []fileInfo
 		for _, file := range filesToCopy {
@@ -347,13 +415,13 @@ func (w *CopyWorker) copyDirectory(job *Job) error {
 			}
 		}
 		filesToCopy = pendingFiles
-		
+
 		if len(filesToCopy) == 0 {
 			w.logger.Infow("All files already completed", "jobID", job.ID)
 			return nil
 		}
 	}
-	
+
 	// Initialize file tracking for pending files
 	var jobFiles []*JobFile
 	for _, file := range filesToCopy {
@@ -366,7 +434,7 @@ func (w *CopyWorker) copyDirectory(job *Job) error {
 			Status:       "pending",
 		})
 	}
-	
+
 	if err := w.persister.SaveJobFiles(jobFiles); err != nil {
 		w.logger.Warnw("Failed to initialize file tracking, continuing anyway", "jobID", job.ID, "error", err)
 	}
@@ -385,7 +453,7 @@ func (w *CopyWorker) copyDirectory(job *Job) error {
 
 		// Copy the file
 		err = w.copySingleFileWithProgress(job, file.path, destPath)
-		
+
 		// Update file tracking status
 		now := time.Now()
 		jobFile := &JobFile{
@@ -394,7 +462,7 @@ func (w *CopyWorker) copyDirectory(job *Job) error {
 			RelativePath: relPath,
 			Size:         file.size,
 		}
-		
+
 		if err != nil {
 			jobFile.Status = "failed"
 			jobFile.ErrorMessage = err.Error()
@@ -402,19 +470,19 @@ func (w *CopyWorker) copyDirectory(job *Job) error {
 			jobFile.Status = "completed"
 			jobFile.CompletedAt = &now
 		}
-		
+
 		if trackErr := w.persister.SaveJobFile(jobFile); trackErr != nil {
-			w.logger.Warnw("Failed to update file tracking status", 
-				"jobID", job.ID, 
-				"file", file.path, 
+			w.logger.Warnw("Failed to update file tracking status",
+				"jobID", job.ID,
+				"file", file.path,
 				"status", jobFile.Status,
 				"error", trackErr)
 		}
-		
+
 		if err != nil {
 			return fmt.Errorf("failed to copy file %s: %w", file.path, err)
 		}
-		
+
 		// ProcessedSize is updated within copySingleFileWithProgress and then aggregated
 		// Update overall job progress after each file
 		if job.TotalSize > 0 { // Avoid division by zero if directory was empty
@@ -506,6 +574,28 @@ func (w *CopyWorker) createUploadJob(copyJob *Job) {
 	}
 	if dirTaskID, ok := copyJob.Metadata["dir_task_id"]; ok {
 		uploadJob.AddMetadata("dir_task_id", dirTaskID)
+	}
+	if lineageRunID, ok := copyJob.Metadata["lineage_run_id"]; ok {
+		uploadJob.AddMetadata("parent_lineage_run_id", lineageRunID)
+	}
+
+	// Add file list and hashes to metadata
+	srcFiles, err := ScanDirectoryForFiles(uploadSourcePath, &FileScanOptions{
+		ExcludePatterns: w.config.Copy.ExcludePatterns,
+		Logger:          w.logger,
+	})
+	if err != nil {
+		w.logger.Warnw("Failed to scan directory for files", "source", uploadSourcePath, "error", err)
+		srcFiles = []FileInfo{} // Use empty list if scanning fails
+	}
+
+	// Convert srcFiles to JSON string for metadata
+	srcFilesJSON, err := json.Marshal(srcFiles)
+	if err != nil {
+		w.logger.Warnw("Failed to marshal src_files to JSON", "error", err)
+		uploadJob.AddMetadata("src_files", "[]") // Use empty array string if marshaling fails
+	} else {
+		uploadJob.AddMetadata("src_files", string(srcFilesJSON))
 	}
 
 	// Save the new upload job to the database

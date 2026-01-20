@@ -37,6 +37,9 @@ copy:
   exclude_patterns:
     - "*.tmp"
     - "*.DS_Store"
+  exclude_directory_patterns:
+    - "System Volume Information"
+  min_free_space_ratio: 0.01
 
 upload:
   parallelism: 1
@@ -46,3 +49,6 @@ upload:
     - data.bag
     - meta.json
 
+lineage:
+  enabled: false
+  marquez_url: http://localhost:8080

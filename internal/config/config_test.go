@@ -86,6 +86,8 @@ jobs:
 copy:
   exclude_patterns:
     - "*.tmp"
+  exclude_directories:
+    - "System Volume Information"
   min_free_space_ratio: 0.1
 upload:
   parallelism: 2
@@ -135,6 +137,7 @@ func TestGetValidConfigKeys(t *testing.T) {
 		"usb.scan_interval_ms",
 		"jobs.direct_upload",
 		"copy.exclude_patterns",
+		"copy.exclude_directory_patterns",
 		"upload.parallelism",
 	}
 

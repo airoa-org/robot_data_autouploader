@@ -4,7 +4,7 @@ This system is designed to automatically upload data, from a local source (e.g.,
 
 ## Running the System
 
-The daemon and client can be downloaded from the [releases page](https://github.com/airoa-org/robot_data_autouploader/releases). 
+The daemon and client can be downloaded from the [releases page](https://github.com/airoa-org/robot_data_autouploader/releases).
 
 ### Recommended Installation Method
 
@@ -16,15 +16,65 @@ This playbook includes the auto-USB mounting configuration.
 ### Prerequisites
 
 - Linux x86_64 system
+- airoa-lineage installed (for data-lineage)
+
+### Setup data-lineage scripts
+
+Install `python3`.
+
+```sh
+sudo apt update
+sudo apt install -y --no-install-recommends \
+    git \
+    git-lfs \
+    build-essential \
+    python3 \
+    python3-pip \
+    python-is-python3
+```
+
+Install `airoa-lineage`.
+
+```sh
+pip install git+https://github.com/airoa-org/airoa-lineage
+```
+
+Check if the command is available.
+
+```sh
+airoa-lineage-usb-copy --version
+airoa-lineage-s3-upload --version
+```
+
+### Add to config file
+
+```yaml
+lineage:
+  enabled: true
+  marquez_url: "https://url-for-marquez"
+```
 
 ### Running the Daemon
 
-The daemon is responsible for monitoring source directories or USB drives for new data, staging it, and uploading it to the configured storage solution. 
+#### Binary
+
+The daemon is responsible for monitoring source directories or USB drives for new data, staging it, and uploading it to the configured storage solution.
 
 ```bash
 ./robot-data-daemon-linux-x86_64 --config <path_to_config_file>
-# Example: go run cmd/daemon/main.go --config configs/config.yaml
-# For testing with MinIO: go run cmd/daemon/main.go --config testing/config-minio.yaml
+```
+
+#### Locally
+
+```bash
+go run cmd/daemon/main.go --config <path_to_config_file>
+```
+
+For testing with MinIO
+
+```bash
+docker compose -f testing/docker-compose.yml up -d
+go run cmd/daemon/main.go --config testing/config-minio.yaml
 ```
 
 ### Running the TUI Client
@@ -34,8 +84,16 @@ It must point to the same database as the daemon.
 
 When a upload job has failed, it can be retried from the TUI client.
 
+#### Binary
+
 ```bash
 ./robot-data-client-linux-x86_64 --db <path_to_db_file>
+```
+
+#### Locally
+
+```bash
+go run cmd/client/main.go --db <path_to_db_file>
 ```
 
 #### Screenshots 
@@ -53,11 +111,49 @@ When a upload job has failed, it can be retried from the TUI client.
 
 ### Building
 
-#### On MacOS
+This project includes build scripts that embed git repository information into the binaries.
 
-`docker run --rm --platform=linux/amd64 -v "$(pwd):/app" -w /app golang:1.24 sh -c "apt-get update && apt-get install -y libsqlite3-dev && CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o robot-data-daemon ./cmd/daemon/main.go"`
+#### Using the Build Script
 
-Make sure to build on linux/amd64, and by using a OS with glibc (e.g., Ubuntu) to avoid issues with CGO.
+The easiest way to build with embedded git information:
+
+```bash
+./build.sh
+```
+
+This will:
+- Extract git information (hash, branch, tag, remote URL)
+- Build both daemon and client binaries in the `bin/` directory
+- Embed build information for version tracking
+
+#### Using Make
+
+```bash
+# Build all binaries
+make build
+
+# Build individual components
+make build-daemon
+make build-client
+```
+
+#### Docker Build for Linux (from macOS)
+
+```bash
+docker run --rm --platform=linux/amd64 -v "$(pwd):/app" -w /app golang:1.24 sh -c "
+  apt-get update && apt-get install -y libsqlite3-dev && 
+  CGO_ENABLED=1 GOOS=linux GOARCH=amd64 ./build.sh
+"
+```
+
+#### Version Information
+
+After building, you can check the embedded version information:
+
+```bash
+./bin/robot_data_daemon -v
+./bin/robot_data_client -v
+```
 
 ## Configuration
 
@@ -112,6 +208,7 @@ The system is configured via a YAML file (e.g., `testing/config-minio.yaml`). Be
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `exclude_patterns` | []string | `["*.tmp", "*.DS_Store"]` | File patterns to exclude during copy operations |
+| `exclude_directory_patterns` | []string | `["System Volume Information"]` | Directory patterns to exclude during copy operations |
 | `min_free_space_ratio` | float64 | `0.05` | Minimum free space ratio to maintain (0.05 = 5%) |
 
 ### Upload Settings (`upload`)

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	appconfig "github.com/airoa-org/robot_data_pipeline/autoloader/internal/config"
+	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/lineage"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config" // Added awsconfig import
 	"github.com/aws/aws-sdk-go-v2/credentials"      // Added credentials import
@@ -23,18 +24,19 @@ import (
 
 // UploadWorker handles S3 upload jobs
 type UploadWorker struct {
-	queue      *Queue
-	config     *appconfig.Config
-	s3Client   *s3.Client
-	uploader   *manager.Uploader
-	logger     *zap.SugaredLogger
-	persister  JobPersister // Added JobPersister field
-	ctx        context.Context
-	cancelFunc context.CancelFunc
+	queue         *Queue
+	config        *appconfig.Config
+	s3Client      *s3.Client
+	uploader      *manager.Uploader
+	logger        *zap.SugaredLogger
+	persister     JobPersister // Added JobPersister field
+	lineageClient *lineage.Client
+	ctx           context.Context
+	cancelFunc    context.CancelFunc
 }
 
 // NewUploadWorker creates a new upload worker
-func NewUploadWorker(queue *Queue, cfg *appconfig.Config, persister JobPersister, logger *zap.SugaredLogger) *UploadWorker { // Added persister parameter
+func NewUploadWorker(queue *Queue, cfg *appconfig.Config, persister JobPersister, logger *zap.SugaredLogger, lineageClient *lineage.Client) *UploadWorker {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Create AWS config
@@ -53,12 +55,13 @@ func NewUploadWorker(queue *Queue, cfg *appconfig.Config, persister JobPersister
 		logger.Errorw("Failed to create AWS config", "error", err)
 		// Create a minimal worker that will fail gracefully
 		return &UploadWorker{
-			queue:      queue,
-			config:     cfg,
-			logger:     logger,
-			persister:  persister, // Initialize persister
-			ctx:        ctx,
-			cancelFunc: cancel,
+			queue:         queue,
+			config:        cfg,
+			logger:        logger,
+			persister:     persister, // Initialize persister
+			lineageClient: lineageClient,
+			ctx:           ctx,
+			cancelFunc:    cancel,
 		}
 	}
 
@@ -82,14 +85,15 @@ func NewUploadWorker(queue *Queue, cfg *appconfig.Config, persister JobPersister
 	})
 
 	return &UploadWorker{
-		queue:      queue,
-		config:     cfg,
-		s3Client:   s3Client,
-		uploader:   uploader,
-		logger:     logger,
-		persister:  persister, // Initialize persister
-		ctx:        ctx,
-		cancelFunc: cancel,
+		queue:         queue,
+		config:        cfg,
+		s3Client:      s3Client,
+		uploader:      uploader,
+		logger:        logger,
+		persister:     persister, // Initialize persister
+		lineageClient: lineageClient,
+		ctx:           ctx,
+		cancelFunc:    cancel,
 	}
 }
 
@@ -144,6 +148,21 @@ func (w *UploadWorker) processJob(job *Job) {
 		"source", job.Source,
 		"destination", job.Destination)
 
+	var lineageRunID string
+	runID, err := w.lineageClient.StartS3UploadSession(w.ctx, job)
+	if err != nil {
+		w.logger.Errorw("Failed to start lineage session for upload job",
+			"jobID", job.ID,
+			"error", err)
+		// Continue without lineage tracking
+	} else {
+		lineageRunID = runID
+		job.AddMetadata("lineage_run_id", lineageRunID)
+		w.logger.Infow("Started lineage session for upload job",
+			"jobID", job.ID,
+			"lineageRunID", lineageRunID)
+	}
+
 	// Update job status
 	job.UpdateStatus(JobStatusInProgress)
 	if errDb := w.persister.SaveJob(job); errDb != nil { // Use persister
@@ -159,6 +178,14 @@ func (w *UploadWorker) processJob(job *Job) {
 		if errDb := w.persister.SaveJob(job); errDb != nil { // Use persister
 			w.logger.Errorw("Failed to save job error status to DB (S3 client init failure)", "jobID", job.ID, "error", errDb)
 		}
+		if lineageRunID != "" {
+			if cancelErr := w.lineageClient.CancelS3UploadSession(w.ctx, lineageRunID, job); cancelErr != nil {
+				w.logger.Errorw("Failed to cancel lineage session after upload error",
+					"jobID", job.ID,
+					"lineageRunID", lineageRunID,
+					"error", cancelErr)
+			}
+		}
 		return
 	}
 
@@ -172,6 +199,14 @@ func (w *UploadWorker) processJob(job *Job) {
 		job.SetError(fmt.Errorf("source file not found: %w", err))
 		if errDb := w.persister.SaveJob(job); errDb != nil { // Use persister
 			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
+		}
+		if lineageRunID != "" {
+			if cancelErr := w.lineageClient.CancelS3UploadSession(w.ctx, lineageRunID, job); cancelErr != nil {
+				w.logger.Errorw("Failed to cancel lineage session after upload error",
+					"jobID", job.ID,
+					"lineageRunID", lineageRunID,
+					"error", cancelErr)
+			}
 		}
 		return
 	}
@@ -191,6 +226,14 @@ func (w *UploadWorker) processJob(job *Job) {
 		if errDb := w.persister.SaveJob(job); errDb != nil { // Use persister
 			w.logger.Errorw("Failed to save job error status to DB", "jobID", job.ID, "error", errDb)
 		}
+		if lineageRunID != "" {
+			if cancelErr := w.lineageClient.CancelS3UploadSession(w.ctx, lineageRunID, job); cancelErr != nil {
+				w.logger.Errorw("Failed to cancel lineage session after upload error",
+					"jobID", job.ID,
+					"lineageRunID", lineageRunID,
+					"error", cancelErr)
+			}
+		}
 		return
 	}
 
@@ -207,6 +250,21 @@ func (w *UploadWorker) processJob(job *Job) {
 
 	w.logger.Infow("Upload job completed", "jobID", job.ID)
 
+	// Complete lineage session on success
+	if lineageRunID != "" {
+		if completeErr := w.lineageClient.CompleteS3UploadSession(w.ctx, lineageRunID, job); completeErr != nil {
+			w.logger.Errorw("Failed to complete lineage session after successful upload",
+				"jobID", job.ID,
+				"lineageRunID", lineageRunID,
+				"error", completeErr)
+			// Don't fail the job, just log the error
+		} else {
+			w.logger.Infow("Completed lineage session for upload job",
+				"jobID", job.ID,
+				"lineageRunID", lineageRunID)
+		}
+	}
+
 	// Delete source from staging if configured
 	if w.config.Storage.Local.RetentionPolicyOnUpload == "delete" {
 		// Only delete if not the source directory
@@ -214,7 +272,7 @@ func (w *UploadWorker) processJob(job *Job) {
 			w.logger.Infow("Attempting to delete staging data after successful upload",
 				"jobID", job.ID,
 				"staging_path", job.Source)
-			
+
 			result, err := RemoveAllBestEffort(job.Source, w.logger)
 			if err != nil {
 				w.logger.Errorw("Error during staging deletion attempt",
@@ -222,7 +280,7 @@ func (w *UploadWorker) processJob(job *Job) {
 					"staging_path", job.Source,
 					"error", err)
 			}
-			
+
 			// Determine overall success/failure for staging deletion
 			if result.TotalFiles == result.DeletedFiles && result.TotalDirs == result.DeletedDirs {
 				w.logger.Infow("Successfully deleted all staging data after upload",
@@ -240,7 +298,7 @@ func (w *UploadWorker) processJob(job *Job) {
 					"totalDirs", result.TotalDirs,
 					"failedFiles", len(result.FailedFiles),
 					"failedDirs", len(result.FailedDirs))
-				
+
 				// Log details about what couldn't be deleted
 				if len(result.FailedFiles) > 0 {
 					w.logger.Debugw("Files that could not be deleted from staging",
@@ -313,7 +371,7 @@ func (w *UploadWorker) uploadDirectory(job *Job) error {
 		w.logger.Warnw("Failed to get completed files, will process all files", "jobID", job.ID, "error", err)
 	} else if len(completedFiles) > 0 {
 		w.logger.Infow("Found completed files from previous run", "jobID", job.ID, "count", len(completedFiles))
-		
+
 		// Create a map of completed files for fast lookup
 		completedMap := make(map[string]bool)
 		var completedSize int64
@@ -321,7 +379,7 @@ func (w *UploadWorker) uploadDirectory(job *Job) error {
 			completedMap[cf.FilePath] = true
 			completedSize += cf.Size
 		}
-		
+
 		// Update processed size to reflect already completed files
 		job.ProcessedSize = completedSize
 		if job.TotalSize > 0 {
@@ -330,7 +388,7 @@ func (w *UploadWorker) uploadDirectory(job *Job) error {
 		if errDb := w.persister.SaveJob(job); errDb != nil {
 			w.logger.Warnw("Failed to update job progress after checking completed files", "jobID", job.ID, "error", errDb)
 		}
-		
+
 		// Filter out already completed files
 		var pendingFiles []fileInfo
 		for _, file := range filesToUpload {
@@ -341,13 +399,13 @@ func (w *UploadWorker) uploadDirectory(job *Job) error {
 			}
 		}
 		filesToUpload = pendingFiles
-		
+
 		if len(filesToUpload) == 0 {
 			w.logger.Infow("All files already uploaded", "jobID", job.ID)
 			return nil
 		}
 	}
-	
+
 	// Initialize file tracking for pending files
 	var jobFiles []*JobFile
 	for _, file := range filesToUpload {
@@ -360,7 +418,7 @@ func (w *UploadWorker) uploadDirectory(job *Job) error {
 			Status:       "pending",
 		})
 	}
-	
+
 	if err := w.persister.SaveJobFiles(jobFiles); err != nil {
 		w.logger.Warnw("Failed to initialize file tracking, continuing anyway", "jobID", job.ID, "error", err)
 	}
@@ -379,7 +437,7 @@ func (w *UploadWorker) uploadDirectory(job *Job) error {
 
 		// Upload the file
 		err = w.uploadFile(job, file.path, destKey)
-		
+
 		// Update file tracking status
 		now := time.Now()
 		jobFile := &JobFile{
@@ -388,7 +446,7 @@ func (w *UploadWorker) uploadDirectory(job *Job) error {
 			RelativePath: relPath,
 			Size:         file.size,
 		}
-		
+
 		if err != nil {
 			jobFile.Status = "failed"
 			jobFile.ErrorMessage = err.Error()
@@ -396,11 +454,11 @@ func (w *UploadWorker) uploadDirectory(job *Job) error {
 			jobFile.Status = "completed"
 			jobFile.CompletedAt = &now
 		}
-		
+
 		if trackErr := w.persister.SaveJobFile(jobFile); trackErr != nil {
-			w.logger.Warnw("Failed to update file tracking status", 
-				"jobID", job.ID, 
-				"file", file.path, 
+			w.logger.Warnw("Failed to update file tracking status",
+				"jobID", job.ID,
+				"file", file.path,
 				"status", jobFile.Status,
 				"error", trackErr)
 		}
@@ -452,14 +510,14 @@ func calculateS3ETag(filePath string, chunkSizeMb int) (string, error) {
 			return "", err
 		}
 	}
-	
+
 	// Handle 0-size files
 	if len(md5s) == 0 {
 		// For 0-size files, S3 returns the MD5 of empty content without part count suffix
 		h := md5.New()
 		return fmt.Sprintf("%x", h.Sum(nil)), nil
 	}
-	
+
 	if len(md5s) == 1 {
 		return fmt.Sprintf("%x", md5s[0]), nil
 	}
@@ -675,7 +733,6 @@ func (w *UploadWorker) uploadFile(job *Job, filePath, s3Key string) error {
 	}
 
 	w.logger.Infow("S3 upload completed and verified successfully", "jobID", job.ID, "filePath", filePath, "s3Key", finalS3Key)
-
 
 	if job.FileCount <= 1 && job.TotalSize == fileInfo.Size() {
 		job.ProcessedSize = fileInfo.Size()

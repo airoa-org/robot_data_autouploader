@@ -8,7 +8,9 @@ import (
 	"os/signal"
 	"syscall"
 
+	appconfig "github.com/airoa-org/robot_data_pipeline/autoloader/internal/config"
 	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/daemon"
+	"github.com/airoa-org/robot_data_pipeline/autoloader/internal/lineage"
 	"go.uber.org/zap"
 )
 
@@ -21,7 +23,14 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Println(version)
+		// Show build information
+		buildInfo := appconfig.GetBuildInfo()
+		fmt.Printf("Version: %s\n", appconfig.GetVersionString())
+		fmt.Printf("Git Hash: %s\n", buildInfo["git_hash"])
+		fmt.Printf("Git Branch: %s\n", buildInfo["git_branch"])
+		fmt.Printf("Git Tag: %s\n", buildInfo["git_tag"])
+		fmt.Printf("Git Remote: %s\n", buildInfo["git_remote"])
+		fmt.Printf("Build Time: %s\n", buildInfo["build_time"])
 		os.Exit(0)
 	}
 
@@ -39,6 +48,23 @@ func main() {
 	if err != nil {
 		sugar.Errorw("Failed to create daemon service", "error", err)
 		os.Exit(1)
+	}
+
+	// Validate lineage configuration if enabled
+	config := service.GetConfig()
+	if lineage.IsEnabled(config) {
+		sugar.Infow("Lineage configuration details",
+			"enabled", config.Lineage.Enabled,
+			"marquez_url", config.Lineage.MarquezURL,
+			"namespace", config.Lineage.Namespace)
+
+		if err := lineage.ValidateConfig(config); err != nil {
+			sugar.Errorw("Lineage configuration validation failed", "error", err)
+			sugar.Errorw("Set lineage.enabled=true and lineage.marquez_url in config file")
+			os.Exit(1)
+		}
+	} else {
+		sugar.Info("Lineage is disabled")
 	}
 
 	// Set up signal handling

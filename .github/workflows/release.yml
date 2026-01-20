@@ -18,30 +18,27 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
         go-version: '1.24'
-    
+
     - name: Install dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y libsqlite3-dev
-    
-    - name: Build daemon
+
+    - name: Build binaries using build.sh
       run: |
-        CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=$(git rev-parse HEAD)" -o robot-data-daemon-linux-x86_64 ./cmd/daemon/main.go
-        chmod +x robot-data-daemon-linux-x86_64
-    
-    - name: Build client
-      run: |
-        CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=$(git rev-parse HEAD)" -o robot-data-client-linux-x86_64 ./cmd/client/main.go
-        chmod +x robot-data-client-linux-x86_64
-    
+        ./build.sh
+
+        # Copy binaries to root with platform-specific names for release
+        cp bin/robot_data_daemon robot-data-daemon-linux-x86_64
+        cp bin/robot_data_client robot-data-client-linux-x86_64
     - name: Create Release for Tag
       uses: softprops/action-gh-release@v2.2.2
       if: startsWith(github.ref, 'refs/tags/')
@@ -51,18 +48,18 @@ jobs:
           robot-data-client-linux-x86_64
         generate_release_notes: true
         make_latest: true
-    
+
     - name: Update latest tag
       if: startsWith(github.ref, 'refs/tags/')
       run: |
         # Delete existing latest tag and push deletion
         git tag -d latest || true
         git push origin :refs/tags/latest || true
-        
+
         # Create new latest tag pointing to current commit
         git tag latest
         git push origin latest
-    
+
     - name: Create Release for Commit
       uses: softprops/action-gh-release@v2.2.2
       if: github.ref == 'refs/heads/main'
